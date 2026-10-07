@@ -1,0 +1,534 @@
+{
+  "name": "PromptGuard Demo V0",
+  "verdict": "B — DEMO READY WITH LIMITATIONS",
+  "claude_code_version": "2.1.291",
+  "python_version": "3.12.14",
+  "credsweeper_version": "1.19.0",
+  "ml_enabled": false,
+  "architecture": {
+    "mod": "transform",
+    "guard": "verify/block",
+    "detector_processes": "independent persistent workers"
+  },
+  "detector_metrics": {
+    "tp": 32,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "f2": 1.0
+  },
+  "span_normalization": {
+    "status": "PASS",
+    "checks": {
+      "duplicate_deduped": true,
+      "nested_merged": true,
+      "overlap_merged": true,
+      "repeated_locations_preserved": true,
+      "multiline_span_preserved": true,
+      "invalid_zero_out_of_range_rejected": true,
+      "utf16_conversion": true
+    },
+    "offset_unit": "utf16_code_units"
+  },
+  "regression_summary": {
+    "pass": 49,
+    "partial": 1,
+    "fail": 0,
+    "parallel_20_pass": true
+  },
+  "audit_safety": {
+    "files_checked": 293,
+    "raw_secret_hits": 0,
+    "hit_files": []
+  },
+  "source_immutability": true,
+  "demo": {
+    "status": "PASS",
+    "requests": 5,
+    "raw_upstream_candidates": 0,
+    "diagnosis": "configured port 5433 differs from expected 5432 (E_PORT_MISMATCH)"
+  },
+  "performance": {
+    "configurations": {
+      "A_baseline": {
+        "runs": 40,
+        "mean_ms": 0.0,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0
+      },
+      "B_mod_deterministic": {
+        "runs": 40,
+        "mean_ms": 0.002,
+        "p50_ms": 0.002,
+        "p95_ms": 0.002
+      },
+      "C_mod_credsweeper_persistent": {
+        "runs": 40,
+        "mean_ms": 0.4,
+        "p50_ms": 0.338,
+        "p95_ms": 0.657
+      },
+      "D_mod_credsweeper_guard": {
+        "runs": 40,
+        "mean_ms": 0.764,
+        "p50_ms": 0.675,
+        "p95_ms": 1.237
+      }
+    },
+    "persistent_worker_startup": {
+      "runs": 5,
+      "mean_ms": 2673.789,
+      "p50_ms": 2475.657,
+      "p95_ms": 2915.416
+    },
+    "large_output": {
+      "10KB": {
+        "bytes": 9985,
+        "latency_ms": 5.184,
+        "findings": 1,
+        "errors": []
+      },
+      "100KB": {
+        "bytes": 99985,
+        "latency_ms": 42.164,
+        "findings": 1,
+        "errors": []
+      },
+      "1MB": {
+        "bytes": 999985,
+        "latency_ms": 433.088,
+        "findings": 1,
+        "errors": []
+      },
+      "5MB": {
+        "bytes": 4999985,
+        "latency_ms": 2298.573,
+        "findings": 1,
+        "errors": []
+      }
+    },
+    "note": "Detector microbenchmark; not end-to-end UI latency. D runs independent Mod and Guard scans."
+  },
+  "matrix": [
+    {
+      "case": "v0-user-context",
+      "scenario": "simple",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 1,
+      "durationMs": 2540.8
+    },
+    {
+      "case": "v0-read",
+      "scenario": "read",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 3217.9
+    },
+    {
+      "case": "v0-bash-success",
+      "scenario": "bash-success",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 4367.6
+    },
+    {
+      "case": "v0-bash-failure",
+      "scenario": "bash-failure",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 3259.9
+    },
+    {
+      "case": "v0-grep",
+      "scenario": "grep",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2567.3
+    },
+    {
+      "case": "v0-mcp-success",
+      "scenario": "mcp-success",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2471.5
+    },
+    {
+      "case": "v0-mcp-failure",
+      "scenario": "mcp-failure",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2328.8
+    },
+    {
+      "case": "v0-parallel",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2431.6
+    },
+    {
+      "case": "v0-subagent",
+      "scenario": "subagent",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 5,
+      "durationMs": 3493.0
+    },
+    {
+      "case": "v0-append-system",
+      "scenario": "simple",
+      "expected": "allow",
+      "status": "PARTIAL",
+      "exitCode": 1,
+      "upstreamRequests": 0,
+      "durationMs": 2843.5,
+      "note": "Native Mod blind path; Final Guard blocked twice; upstream 0 (same known 2.1.291 limitation)."
+    },
+    {
+      "case": "v0-unicode",
+      "scenario": "simple",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 1,
+      "durationMs": 2698.5
+    },
+    {
+      "case": "v0-demo",
+      "scenario": "demo",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 5,
+      "durationMs": 4139.1
+    },
+    {
+      "case": "v0-mod-throw",
+      "scenario": "simple",
+      "expected": "block",
+      "status": "PASS",
+      "exitCode": 1,
+      "upstreamRequests": 0,
+      "durationMs": 2267.7
+    },
+    {
+      "case": "v0-safe-mode",
+      "scenario": "simple",
+      "expected": "block",
+      "status": "PASS",
+      "exitCode": 1,
+      "upstreamRequests": 0,
+      "durationMs": 1744.1
+    },
+    {
+      "case": "v0-mod-invalid-span",
+      "scenario": "simple",
+      "expected": "block",
+      "status": "PASS",
+      "exitCode": 1,
+      "upstreamRequests": 0,
+      "durationMs": 2417.6
+    },
+    {
+      "case": "v0-guard-malformed",
+      "scenario": "simple",
+      "expected": "block",
+      "status": "PASS",
+      "exitCode": 1,
+      "upstreamRequests": 0,
+      "durationMs": 2632.7
+    },
+    {
+      "case": "v0-retry",
+      "scenario": "retry-500",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 3110.7
+    },
+    {
+      "case": "v0-par20-01",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2850.4
+    },
+    {
+      "case": "v0-par20-02",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2584.2
+    },
+    {
+      "case": "v0-par20-03",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2995.4
+    },
+    {
+      "case": "v0-par20-04",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2393.4
+    },
+    {
+      "case": "v0-par20-05",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2293.0
+    },
+    {
+      "case": "v0-par20-06",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2330.4
+    },
+    {
+      "case": "v0-par20-07",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2604.0
+    },
+    {
+      "case": "v0-par20-08",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2455.7
+    },
+    {
+      "case": "v0-par20-09",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2388.7
+    },
+    {
+      "case": "v0-par20-10",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2292.7
+    },
+    {
+      "case": "v0-par20-11",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2296.8
+    },
+    {
+      "case": "v0-par20-12",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2674.0
+    },
+    {
+      "case": "v0-par20-13",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2398.4
+    },
+    {
+      "case": "v0-par20-14",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 3428.7
+    },
+    {
+      "case": "v0-par20-15",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2734.7
+    },
+    {
+      "case": "v0-par20-16",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2777.1
+    },
+    {
+      "case": "v0-par20-17",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2766.4
+    },
+    {
+      "case": "v0-par20-18",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2857.5
+    },
+    {
+      "case": "v0-par20-19",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2518.9
+    },
+    {
+      "case": "v0-par20-20",
+      "scenario": "parallel",
+      "expected": "allow",
+      "status": "PASS",
+      "exitCode": 0,
+      "upstreamRequests": 2,
+      "durationMs": 2449.9
+    },
+    {
+      "case": "v0-count-tokens-raw",
+      "scenario": "count_tokens",
+      "expected": "block",
+      "status": "PASS",
+      "statusCode": 422
+    },
+    {
+      "case": "v0-count-tokens-safe",
+      "scenario": "count_tokens",
+      "expected": "allow",
+      "status": "PASS",
+      "statusCode": 200
+    },
+    {
+      "case": "v0-unknown-endpoint",
+      "scenario": "unknown_endpoint",
+      "expected": "block",
+      "status": "PASS",
+      "statusCode": 422
+    },
+    {
+      "case": "v0-resume-fresh",
+      "status": "PASS",
+      "note": "protected session resumed; raw upstream 0"
+    },
+    {
+      "case": "v0-compact-resume",
+      "status": "PASS",
+      "note": "manual compact_result=success; raw upstream 0"
+    },
+    {
+      "case": "v0-source-immutability",
+      "status": "PASS",
+      "note": "SHA-256 unchanged: 8e7380275e6994ec1631bcf11544128d445d5be0204dd83270642a49de2492aa"
+    },
+    {
+      "case": "failure-crash",
+      "status": "PASS",
+      "statusCode": 422,
+      "note": "Guard fail-closed; upstream 0"
+    },
+    {
+      "case": "failure-timeout",
+      "status": "PASS",
+      "statusCode": 422,
+      "note": "Guard fail-closed; upstream 0"
+    },
+    {
+      "case": "failure-import",
+      "status": "PASS",
+      "statusCode": 422,
+      "note": "Guard fail-closed; upstream 0"
+    },
+    {
+      "case": "failure-malformed",
+      "status": "PASS",
+      "statusCode": 422,
+      "note": "Guard fail-closed; upstream 0"
+    },
+    {
+      "case": "failure-invalid",
+      "status": "PASS",
+      "statusCode": 422,
+      "note": "Guard fail-closed; upstream 0"
+    },
+    {
+      "case": "failure-unicode",
+      "status": "PASS",
+      "statusCode": 422,
+      "note": "Guard fail-closed; upstream 0"
+    },
+    {
+      "case": "failure-python-not-found",
+      "status": "PASS",
+      "statusCode": 422,
+      "note": "Guard fail-closed; upstream 0"
+    }
+  ],
+  "limitations": [
+    "--append-system-prompt is invisible to 2.1.291 Native Mod hooks; Final Guard blocks it.",
+    "Actual Anthropic provider E2E was not run because no real credential was used.",
+    "Legacy raw session migration, managed enforcement, local queue journal persistence, and automatic compaction completion remain separate gates.",
+    "The local MCP bridge tool is listed by Claude Code; its response is raw-free and outbound Guard still verifies subsequent bodies."
+  ]
+}

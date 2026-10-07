@@ -1,0 +1,9 @@
+{
+  "database": {
+    "host": "db.internal",
+    "port": 5432,
+    "name": "payments",
+    "password": "JsonPass!62qDemo"
+  },
+  "api_key": "sk_test_PGDEMO_7xQ9mK2pR5vN8cL4"
+}

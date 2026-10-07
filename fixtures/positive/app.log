@@ -1,0 +1,2 @@
+2026-10-07T10:00:00Z ERROR database connection failed error_code=DB_AUTH_28 password=LogPass!73mDemo host=db.internal port=5432 database=payments
+2026-10-07T10:00:01Z WARN upstream returned status=401 token=LogToken_8qM3vK7pR2xN5sL9 service=billing

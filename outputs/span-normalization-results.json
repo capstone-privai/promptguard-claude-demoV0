@@ -1,0 +1,13 @@
+{
+  "status": "PASS",
+  "checks": {
+    "duplicate_deduped": true,
+    "nested_merged": true,
+    "overlap_merged": true,
+    "repeated_locations_preserved": true,
+    "multiline_span_preserved": true,
+    "invalid_zero_out_of_range_rejected": true,
+    "utf16_conversion": true
+  },
+  "offset_unit": "utf16_code_units"
+}

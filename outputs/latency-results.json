@@ -1,0 +1,61 @@
+{
+  "configurations": {
+    "A_baseline": {
+      "runs": 40,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0
+    },
+    "B_mod_deterministic": {
+      "runs": 40,
+      "mean_ms": 0.002,
+      "p50_ms": 0.002,
+      "p95_ms": 0.002
+    },
+    "C_mod_credsweeper_persistent": {
+      "runs": 40,
+      "mean_ms": 0.491,
+      "p50_ms": 0.422,
+      "p95_ms": 0.809
+    },
+    "D_mod_credsweeper_guard": {
+      "runs": 40,
+      "mean_ms": 0.759,
+      "p50_ms": 0.679,
+      "p95_ms": 1.176
+    }
+  },
+  "persistent_worker_startup": {
+    "runs": 5,
+    "mean_ms": 2362.309,
+    "p50_ms": 2351.47,
+    "p95_ms": 2399.087
+  },
+  "large_output": {
+    "10KB": {
+      "bytes": 9985,
+      "latency_ms": 4.743,
+      "findings": 1,
+      "errors": []
+    },
+    "100KB": {
+      "bytes": 99985,
+      "latency_ms": 42.317,
+      "findings": 1,
+      "errors": []
+    },
+    "1MB": {
+      "bytes": 999985,
+      "latency_ms": 436.475,
+      "findings": 1,
+      "errors": []
+    },
+    "5MB": {
+      "bytes": 4999985,
+      "latency_ms": 2180.342,
+      "findings": 1,
+      "errors": []
+    }
+  },
+  "note": "Detector microbenchmark; not end-to-end UI latency. D runs independent Mod and Guard scans."
+}

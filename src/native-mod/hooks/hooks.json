@@ -1,0 +1,4 @@
+{
+  "description": "Uses a local CredSweeper adapter to sanitize prompts, context, tools, subagents, history, and compaction while preserving structure",
+  "modules": ["./register.mjs"]
+}

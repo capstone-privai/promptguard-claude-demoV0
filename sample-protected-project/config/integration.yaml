@@ -1,0 +1,5 @@
+service: inventory-gateway
+region: ap-northeast-2
+endpoint: https://inventory.internal/api
+token: "YamlDemoToken_7qM2vK9pR5xN8sL4"
+timeout_seconds: 10

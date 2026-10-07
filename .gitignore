@@ -1,0 +1,12 @@
+.venv/
+.runtime/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.DS_Store
+Thumbs.db
+
+# Keep the intentionally synthetic fixtures in Git.
+!fixtures/**/*.log
+!sample-protected-project/logs/*.log

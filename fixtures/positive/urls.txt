@@ -1,0 +1,4 @@
+POSTGRES_URL=postgresql://demo:PgDemo!42xQ@db.internal:5432/payments
+MYSQL_URL=mysql://demo:MySqlDemo!73q@mysql.internal:3306/billing
+REDIS_URL=redis://default:RedisDemo!72q@cache.internal:6379/0
+BASIC_URL=https://demo:BasicDemo!33z@service.internal/api

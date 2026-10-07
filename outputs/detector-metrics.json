@@ -1,0 +1,276 @@
+{
+  "detector": "CredSweeper",
+  "ml": false,
+  "offset_unit": "utf16_code_units",
+  "tp": 32,
+  "fp": 0,
+  "fn": 0,
+  "precision": 1.0,
+  "recall": 1.0,
+  "f1": 1.0,
+  "f2": 1.0,
+  "false_positives": [],
+  "false_negatives": [],
+  "per_file": [
+    {
+      "file": ".env",
+      "expected": 3,
+      "found": 3,
+      "errors": []
+    },
+    {
+      "file": "urls.txt",
+      "expected": 4,
+      "found": 4,
+      "errors": []
+    },
+    {
+      "file": "tokens.txt",
+      "expected": 6,
+      "found": 6,
+      "errors": []
+    },
+    {
+      "file": "config.json",
+      "expected": 2,
+      "found": 2,
+      "errors": []
+    },
+    {
+      "file": "config.yaml",
+      "expected": 2,
+      "found": 2,
+      "errors": []
+    },
+    {
+      "file": "app.log",
+      "expected": 2,
+      "found": 2,
+      "errors": []
+    },
+    {
+      "file": "mcp.json",
+      "expected": 2,
+      "found": 2,
+      "errors": []
+    },
+    {
+      "file": "repeat.txt",
+      "expected": 3,
+      "found": 3,
+      "errors": []
+    },
+    {
+      "file": "unicode.txt",
+      "expected": 4,
+      "found": 4,
+      "errors": []
+    },
+    {
+      "file": "private.pem",
+      "expected": 4,
+      "found": 4,
+      "errors": []
+    },
+    {
+      "file": "benign.env",
+      "expected": 0,
+      "found": 0,
+      "errors": []
+    }
+  ],
+  "ground_truth": [
+    {
+      "file": ".env",
+      "expected_type": "PASSWORD",
+      "expected_start": 9,
+      "expected_end": 26
+    },
+    {
+      "file": ".env",
+      "expected_type": "API_KEY",
+      "expected_start": 35,
+      "expected_end": 66
+    },
+    {
+      "file": ".env",
+      "expected_type": "TOKEN",
+      "expected_start": 73,
+      "expected_end": 101
+    },
+    {
+      "file": "urls.txt",
+      "expected_type": "PASSWORD",
+      "expected_start": 31,
+      "expected_end": 42
+    },
+    {
+      "file": "urls.txt",
+      "expected_type": "PASSWORD",
+      "expected_start": 92,
+      "expected_end": 105
+    },
+    {
+      "file": "urls.txt",
+      "expected_type": "PASSWORD",
+      "expected_start": 160,
+      "expected_end": 173
+    },
+    {
+      "file": "urls.txt",
+      "expected_type": "PASSWORD",
+      "expected_start": 219,
+      "expected_end": 232
+    },
+    {
+      "file": "tokens.txt",
+      "expected_type": "TOKEN",
+      "expected_start": 22,
+      "expected_end": 56
+    },
+    {
+      "file": "tokens.txt",
+      "expected_type": "JWT",
+      "expected_start": 61,
+      "expected_end": 146
+    },
+    {
+      "file": "tokens.txt",
+      "expected_type": "GITHUB_TOKEN",
+      "expected_start": 160,
+      "expected_end": 200
+    },
+    {
+      "file": "tokens.txt",
+      "expected_type": "AWS_KEY",
+      "expected_start": 219,
+      "expected_end": 239
+    },
+    {
+      "file": "tokens.txt",
+      "expected_type": "SLACK_TOKEN",
+      "expected_start": 252,
+      "expected_end": 299
+    },
+    {
+      "file": "tokens.txt",
+      "expected_type": "SECRET",
+      "expected_start": 307,
+      "expected_end": 339
+    },
+    {
+      "file": "config.json",
+      "expected_type": "PASSWORD",
+      "expected_start": 104,
+      "expected_end": 120
+    },
+    {
+      "file": "config.json",
+      "expected_type": "API_KEY",
+      "expected_start": 141,
+      "expected_end": 172
+    },
+    {
+      "file": "config.yaml",
+      "expected_type": "PASSWORD",
+      "expected_start": 51,
+      "expected_end": 67
+    },
+    {
+      "file": "config.yaml",
+      "expected_type": "TOKEN",
+      "expected_start": 77,
+      "expected_end": 103
+    },
+    {
+      "file": "app.log",
+      "expected_type": "PASSWORD",
+      "expected_start": 85,
+      "expected_end": 100
+    },
+    {
+      "file": "app.log",
+      "expected_type": "TOKEN",
+      "expected_start": 207,
+      "expected_end": 232
+    },
+    {
+      "file": "mcp.json",
+      "expected_type": "PASSWORD",
+      "expected_start": 93,
+      "expected_end": 108
+    },
+    {
+      "file": "mcp.json",
+      "expected_type": "TOKEN",
+      "expected_start": 125,
+      "expected_end": 150
+    },
+    {
+      "file": "repeat.txt",
+      "expected_type": "PASSWORD",
+      "expected_start": 9,
+      "expected_end": 27
+    },
+    {
+      "file": "repeat.txt",
+      "expected_type": "PASSWORD",
+      "expected_start": 44,
+      "expected_end": 62
+    },
+    {
+      "file": "repeat.txt",
+      "expected_type": "PASSWORD",
+      "expected_start": 81,
+      "expected_end": 99
+    },
+    {
+      "file": "unicode.txt",
+      "expected_type": "PASSWORD",
+      "expected_start": 16,
+      "expected_end": 34
+    },
+    {
+      "file": "unicode.txt",
+      "expected_type": "TOKEN",
+      "expected_start": 48,
+      "expected_end": 78
+    },
+    {
+      "file": "unicode.txt",
+      "expected_type": "API_KEY",
+      "expected_start": 96,
+      "expected_end": 121
+    },
+    {
+      "file": "unicode.txt",
+      "expected_type": "PASSWORD",
+      "expected_start": 136,
+      "expected_end": 152
+    },
+    {
+      "file": "private.pem",
+      "expected_type": "PRIVATE_KEY",
+      "expected_start": 28,
+      "expected_end": 96
+    },
+    {
+      "file": "private.pem",
+      "expected_type": "PRIVATE_KEY",
+      "expected_start": 97,
+      "expected_end": 165
+    },
+    {
+      "file": "private.pem",
+      "expected_type": "PRIVATE_KEY",
+      "expected_start": 166,
+      "expected_end": 234
+    },
+    {
+      "file": "private.pem",
+      "expected_type": "PRIVATE_KEY",
+      "expected_start": 235,
+      "expected_end": 303
+    }
+  ]
+}

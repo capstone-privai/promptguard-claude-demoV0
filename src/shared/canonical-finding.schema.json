@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PromptGuard Canonical Finding",
+  "type": "object",
+  "required": ["type", "start", "end", "value_hash", "confidence", "rule_id", "source", "offset_unit"],
+  "properties": {
+    "type": { "type": "string" },
+    "start": { "type": "integer", "minimum": 0 },
+    "end": { "type": "integer", "minimum": 1 },
+    "value_hash": { "type": "string", "minLength": 64, "maxLength": 64 },
+    "confidence": { "type": "string" },
+    "rule_id": { "type": "string" },
+    "source": { "type": "string" },
+    "offset_unit": { "const": "utf16_code_units" },
+    "json_path": { "type": "string" },
+    "container_path": { "type": "string" }
+  },
+  "additionalProperties": false
+}

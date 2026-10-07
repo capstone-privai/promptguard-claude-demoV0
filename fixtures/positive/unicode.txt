@@ -1,0 +1,4 @@
+한국어 설정 PASSWORD=KoreanPass!82qDemo
+日本語の設定 TOKEN=JapaneseToken_8qN2vK5pR7xM4sL9
+🔐 emoji API_KEY=EmojiKey_4qM8vK2pR7xN5sL9
+CRLF_PASSWORD=CrLfPass!62mDemo

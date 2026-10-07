@@ -1,0 +1,3 @@
+PASSWORD=RepeatPass!92qDemo
+backup_password=RepeatPass!92qDemo
+JSON={"password":"RepeatPass!92qDemo","host":"db.internal"}

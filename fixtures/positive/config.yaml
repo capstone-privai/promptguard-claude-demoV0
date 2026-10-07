@@ -1,0 +1,4 @@
+service: billing
+region: ap-northeast-2
+password: "YamlPass!84zDemo"
+token: "YamlToken_7qM2vK9pR5xN8sL4"

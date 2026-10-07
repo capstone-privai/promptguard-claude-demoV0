@@ -1,0 +1,13 @@
+{
+  "service": "orders-api",
+  "region": "ap-northeast-2",
+  "database": {
+    "host": "demo-db.internal",
+    "port": 5440,
+    "expectedPort": 5432,
+    "name": "orders",
+    "username": "demo_reader",
+    "password": "JsonDemoOnly!62qSynthetic"
+  },
+  "connectionUri": "postgresql://demo_reader:UriDemoOnly!53zSynthetic@demo-db.internal:5440/orders"
+}

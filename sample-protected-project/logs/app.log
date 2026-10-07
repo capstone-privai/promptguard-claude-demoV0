@@ -1,0 +1,2 @@
+2026-10-07T10:00:00Z ERROR DB_CONNECT_FAILED error_code=E_PORT_MISMATCH host=demo-db.internal configured_port=5440 expected_port=5432 database=orders password=LogDemoOnly!73mSynthetic
+2026-10-07T10:00:01Z WARN INVENTORY_AUTH_FAILED status=401 service=inventory-gateway region=ap-northeast-2 token=LogDemoToken_8qM3vK7pR2xN5sL9

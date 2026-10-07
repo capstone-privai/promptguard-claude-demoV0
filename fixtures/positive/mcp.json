@@ -1,0 +1,8 @@
+{
+  "service": "payments",
+  "region": "ap-northeast-2",
+  "credentials": {
+    "password": "McpPass!52rDemo",
+    "token": "McpToken_6qN2vK8pR4xM7sL9"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "result": {
+    "service": "orders-api",
+    "region": "ap-northeast-2",
+    "credential": {
+      "password": "McpDemoOnly!52rSynthetic",
+      "token": "McpDemoToken_6qN2vK8pR4xM7sL9"
+    },
+    "retryable": false,
+    "errorCode": "E_PORT_MISMATCH"
+  }
+}

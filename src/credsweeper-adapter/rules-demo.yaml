@@ -1,0 +1,86 @@
+- name: PromptGuard Bearer Token
+  severity: high
+  confidence: strong
+  type: pattern
+  values:
+    - '(?i:Authorization)\s*:\s*Bearer\s+(?P<value>[A-Za-z0-9._-]{16,8000})'
+  min_line_len: 32
+  required_substrings:
+    - 'Bearer '
+  use_ml: false
+  target: [code, doc]
+
+- name: PromptGuard JWT
+  severity: high
+  confidence: strong
+  type: pattern
+  values:
+    - '(?P<value>eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})'
+  min_line_len: 32
+  required_substrings:
+    - 'eyJ'
+  use_ml: false
+  target: [code, doc]
+
+- name: PromptGuard GitHub Token
+  severity: high
+  confidence: strong
+  type: pattern
+  values:
+    - '(?P<value>ghp_[A-Za-z0-9]{36,255})'
+  min_line_len: 40
+  required_substrings:
+    - 'ghp_'
+  use_ml: false
+  target: [code, doc]
+
+- name: PromptGuard AWS Access Key
+  severity: high
+  confidence: strong
+  type: pattern
+  values:
+    - '(?P<value>AKIA[A-Z0-9]{16})'
+  min_line_len: 20
+  required_substrings:
+    - 'AKIA'
+  use_ml: false
+  target: [code, doc]
+
+- name: PromptGuard Slack Token
+  severity: high
+  confidence: strong
+  type: pattern
+  values:
+    - '(?P<value>pgdemo-slack-[A-Za-z0-9-]{20,8000})'
+  min_line_len: 32
+  required_substrings:
+    - 'pgdemo-slack-'
+  use_ml: false
+  target: [code, doc]
+
+- name: PromptGuard Token Assignment
+  severity: high
+  confidence: strong
+  type: pattern
+  values:
+    - '(?i:(?:token|secret))\s*["'']?\s*[:=]\s*["'']?(?P<value>[A-Za-z0-9_!@#$%^&*.+/-]{12,8000})'
+  min_line_len: 20
+  required_substrings:
+    - 'TOKEN'
+    - 'token'
+    - 'SECRET'
+    - 'secret'
+  use_ml: false
+  target: [code, doc]
+
+- name: PromptGuard PEM Private Key Body
+  severity: high
+  confidence: strong
+  type: pattern
+  values:
+    - '(?P<value>RkFLRV9Q[A-Za-z0-9+/]{56,8000}={0,2})'
+  min_line_len: 64
+  required_substrings:
+    - 'RkFLRV9Q'
+  use_ml: false
+  target: [code, doc]
