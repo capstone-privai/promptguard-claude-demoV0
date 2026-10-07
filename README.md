@@ -1,14 +1,15 @@
 # PromptGuard Claude Demo V0
 
-Claude Code 2.1.291 Native Mod와 CredSweeper 1.19.0을 이용해 prompt/context/tool output의 credential **값만** placeholder로 바꾸는 Windows용 portable demo입니다.
+Claude Code 2.1.291 Native Mod와 CredSweeper 1.19.0을 이용해 prompt/context/tool output의 credential **값만** placeholder로 바꾸는 Windows/macOS용 portable demo입니다.
 
 > 이 저장소의 password, API key, token, PEM은 모두 비기능 synthetic fixture입니다. 실제 credential은 포함하지 않습니다.
 
 ## 준비물
 
-- Windows PowerShell 5.1 이상
+- Windows PowerShell 5.1 이상 또는 macOS의 Bash
 - Python 3.12 (PATH 등록)
 - Node.js LTS
+- macOS: Xcode Command Line Tools (`xcode-select --install`)
 - Claude Code 2.1.291
 - Claude Pro/Max/Team/Enterprise 계정 또는 Anthropic Console billing
 
@@ -19,6 +20,8 @@ npm install -g @anthropic-ai/claude-code@2.1.291
 ```
 
 ## 1. 설치
+
+### Windows
 
 저장소를 clone한 뒤 실행합니다. `.cmd` wrapper가 현재 PowerShell execution policy를 영구 변경하지 않고 설치 스크립트를 실행합니다.
 
@@ -31,11 +34,31 @@ cd promptguard-claude-demoV0
 설치 시 repository-local `.venv`에 `credsweeper==1.19.0`을 고정 설치합니다.
 `py -3.12` 또는 PATH의 `python`을 자동 탐색합니다. 별도 Python 경로를 써야 한다면 `PROMPTGUARD_PYTHON` 환경 변수에 `python.exe` 경로를 지정할 수 있습니다.
 
+### macOS
+
+```bash
+git clone https://github.com/capstone-privai/promptguard-claude-demoV0.git
+cd promptguard-claude-demoV0
+chmod +x install.sh start-promptguard.sh
+./install.sh
+```
+
+Python 3.12나 Node.js가 없다면 Homebrew를 사용하는 환경에서는 `brew install python@3.12 node`로 설치할 수 있습니다. 별도 Python 경로를 사용하려면 `PROMPTGUARD_PYTHON=/path/to/python3.12 ./install.sh`처럼 지정합니다.
+
 ## 2. synthetic 보호 프로젝트에서 실행
+
+Windows:
 
 ```powershell
 cd sample-protected-project
 ..\start-promptguard.cmd
+```
+
+macOS:
+
+```bash
+cd sample-protected-project
+../start-promptguard.sh
 ```
 
 Claude 로그인 화면이 처음 나오면 구독 계정 사용자는 `Claude account with subscription`을 선택합니다. 계정이나 token을 팀원끼리 공유하지 마세요.
@@ -57,11 +80,20 @@ DB 연결이 실패하는 원인을 찾아줘.
 
 ## 3. 다른 프로젝트에서 실행
 
+Windows:
+
 보호하려는 프로젝트로 이동한 뒤 이 repository의 launcher를 절대 경로로 호출합니다.
 
 ```powershell
 cd C:\path\to\your-project
 C:\path\to\promptguard-claude-demoV0\start-promptguard.cmd
+```
+
+macOS:
+
+```bash
+cd /path/to/your-project
+/path/to/promptguard-claude-demoV0/start-promptguard.sh
 ```
 
 ## 검증 결과
