@@ -88,9 +88,23 @@ DB 연결이 실패하는 원인을 찾아줘.
 4. 실행 결과에 원래 값이 다시 나오면(예: `echo`로 출력) CredSweeper가 놓치더라도 vault 기준으로 같은 placeholder로 다시 가립니다(re-mask).
 5. audit에는 값 없이 `restored_count`, `remasked_count` 개수만 남습니다.
 
-끄려면 `PG_RESTORE_PLACEHOLDERS=off`를 지정합니다. 테스트: `node --test tests/mod/test_restore.mjs`
+끄려면 `PG_RESTORE_PLACEHOLDERS=off`를 지정합니다.
 
-주의: Claude Code가 훅이 바꾼 도구 입력을 대화 기록에 그대로 남기는지는 이 demo에서 검증하지 않았습니다. 이후 요청의 history는 re-mask를 거치지만, 같은 turn 안의 provider 요청은 Final Guard가 없는 portable 모드에서 보장되지 않습니다.
+### 원복한 값이 모델로 다시 실려 가는가? (E2E 검증)
+
+실제 Claude Code CLI + Native Mod + CredSweeper worker를 가짜 Anthropic API에 연결해, provider로 나가는 요청을 전부 기록하고 확인했습니다 (Claude Code 2.1.296에서 확인).
+
+- Claude Code는 대화 기록에 **모델이 쓴 원래 입력**(`[PASSWORD_1]`이 든 명령)을 남기고, 훅이 바꾼 입력(원래 값)은 실행에만 씁니다. 같은 turn의 후속 요청, `--resume`한 다음 turn 요청, 로컬 transcript(`.jsonl`) 어디에도 원래 값이 없습니다.
+- 다만 원복된 명령이 원래 값을 **출력**하면(예: `printf`로 값만 출력) CredSweeper는 `key=value` 문맥이 없어 탐지하지 못합니다. 이 경우는 re-mask가 막습니다. re-mask를 끄고 돌리면 원래 값이 provider 요청과 transcript에 그대로 실려 가는 것을 확인했습니다.
+
+테스트:
+
+```bash
+node --test tests/mod/test_restore.mjs   # 단위 테스트 (가짜 detector)
+node tests/e2e/restore_history.mjs       # E2E (설치 후, Claude Code와 .venv 필요)
+```
+
+E2E 증거(기록된 provider 요청, audit)는 `.runtime/e2e-restore/`에 남습니다.
 
 ## 3. 다른 프로젝트에서 실행
 
@@ -134,6 +148,6 @@ src/credsweeper-adapter/    CredSweeper worker + local MCP bridge
 src/guard/                  validation-only Final Guard mock
 sample-protected-project/   synthetic credential demo
 fixtures/                   labeled positive/negative corpus
-tests/                      detector/span/performance/Mod restore tests
+tests/                      detector/span/performance/Mod restore/E2E tests
 outputs/                    machine-readable validation results
 ```
