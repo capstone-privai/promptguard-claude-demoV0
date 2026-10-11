@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { JSDOM } from 'jsdom'
 import { projectAudit, projectGuard } from '../../src/observability/model.mjs'
-import { summarize, pipeline } from '../../src/observability/public/view.mjs'
+import { summarize, pipeline, sortRows } from '../../src/observability/public/view.mjs'
 import { demo } from '../../src/observability/public/demo.mjs'
 
 const synthetic = '[SYNTHETIC_INPUT_ONLY]'
@@ -40,6 +40,13 @@ test('failure stages are distinct and no Mod event claims provider egress succes
     assert.equal(stages[4].status, 'pending')
     assert.equal(stages[5].status, 'pending')
   }
+})
+
+test('timestamp sorting is derived, stable, and leaves undated events at the end', () => {
+  const rows = [{ timestamp: '2026-10-11T00:00:02.000Z' }, { timestamp: null }, { timestamp: '2026-10-11T00:00:01.000Z' }, { timestamp: undefined }]
+  assert.deepEqual(sortRows(rows, 'newest').map(row => row.timestamp), ['2026-10-11T00:00:02.000Z', '2026-10-11T00:00:01.000Z', null, undefined])
+  assert.deepEqual(sortRows(rows, 'oldest').map(row => row.timestamp), ['2026-10-11T00:00:01.000Z', '2026-10-11T00:00:02.000Z', null, undefined])
+  assert.equal(rows[0].timestamp, '2026-10-11T00:00:02.000Z')
 })
 
 test('SAFE requires normal inspected zero findings; bypass and allow_raw are not verified', () => {
@@ -141,10 +148,39 @@ test('actual app renders safe DOM, supports demo selection, and never logs paylo
     assert.equal(text.includes(synthetic), false)
     assert.equal(text.includes('undefined'), false)
     assert.equal(text.includes('null'), false)
+    assert.equal(dom.window.localStorage.length, 0)
+    assert.equal(dom.window.sessionStorage.length, 0)
     assert.ok(text.includes('NOT VERIFIED'))
     const mode = dom.window.document.getElementById('mode')
     mode.value = 'DEMO'; mode.dispatchEvent(new dom.window.Event('change'))
     assert.ok(dom.window.document.getElementById('notice').textContent.includes('DEMO / MOCK'))
+    const findings = dom.window.document.getElementById('findings')
+    const change = (id, value) => { const control = dom.window.document.getElementById(id); control.value = value; control.dispatchEvent(new dom.window.Event('change')) }
+    change('scenario', 'multiple')
+    assert.equal(findings.querySelectorAll('.finding').length, 3)
+    assert.ok(dom.window.document.getElementById('preview').textContent.includes('[API_KEY_1]'))
+    assert.ok(dom.window.document.getElementById('preview').textContent.includes('[PASSWORD_1]'))
+    assert.equal(dom.window.document.getElementById('preview').querySelectorAll('.preview-row:not(.preview-heading)').length, 3)
+    change('filter-type', 'PASSWORD')
+    assert.equal(findings.querySelectorAll('.finding').length, 2)
+    change('filter-source', 'FILE_READ')
+    change('filter-detector', 'CredSweeper')
+    change('filter-action', 'MASK')
+    assert.equal(findings.querySelectorAll('.finding').length, 2)
+    change('filter-type', 'API_KEY')
+    assert.equal(findings.querySelectorAll('.finding').length, 0)
+    assert.ok(findings.textContent.includes('조건에 맞는 탐지 결과가 없습니다'))
+    change('filter-source', '*')
+    dom.window.document.getElementById('clear-filters').click()
+    assert.equal(findings.querySelectorAll('.finding').length, 3)
+    change('finding-sort', 'oldest')
+    assert.equal(findings.querySelector('.finding strong').textContent, 'API 키 (API_KEY)')
+    change('timeline-sort', 'newest')
+    assert.match(dom.window.document.querySelector('#timeline .event').dataset.event, /2/)
+    change('timeline-sort', 'oldest')
+    assert.match(dom.window.document.querySelector('#timeline .event').dataset.event, /0/)
+    change('scenario', 'empty')
+    assert.ok(findings.textContent.includes('기록된 상세 탐지 결과가 없습니다'))
     for (const scenario of ['empty', 'prompt', 'file', 'tool', 'multiple', 'missing', 'detector-error', 'sanitizer-error', 'blocked']) {
       const select = dom.window.document.getElementById('scenario')
       select.value = scenario; select.dispatchEvent(new dom.window.Event('change'))

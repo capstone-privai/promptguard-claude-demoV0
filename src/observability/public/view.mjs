@@ -23,9 +23,25 @@ export function summarize(events) {
 }
 export const escape = value => String(value ?? '정보 없음').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 export const metric = value => value === null || value === undefined ? '정보 없음' : String(value)
-export function findingMarkup(f, source) {
+export function findingMarkup(f, source, timestamp = null) {
   const location = f.unit && f.start !== null && f.end !== null ? `입력 ${metric(f.payload)} · 위치 ${f.start}–${f.end} (UTF-16 코드 단위, 끝 위치 제외)` : '위치 정보 없음'
-  return `<article class="finding"><strong>${escape(label(f.type))}</strong><span class="tag">${escape(label(source))}</span><dl><dt>탐지기</dt><dd>${escape(f.detector)}</dd><dt>탐지 규칙</dt><dd>${escape(f.rule)}</dd><dt>적용 조치</dt><dd>${escape(label(f.action))}</dd><dt>발견 위치</dt><dd>${escape(location)}</dd></dl><p class="muted">${f.rule ? '탐지기가 보고한 규칙입니다. MASK는 실제 적용된 마스킹 조치를 뜻합니다.' : '사유 메타데이터가 제공되지 않았습니다.'}</p></article>`
+  return `<article class="finding"><strong>${escape(label(f.type))}</strong><span class="tag">${escape(label(source))}</span><dl><dt>탐지기</dt><dd>${escape(f.detector)}</dd><dt>탐지 규칙</dt><dd>${escape(f.rule)}</dd><dt>적용 조치</dt><dd>${escape(label(f.action))}</dd><dt>발견 위치</dt><dd>${escape(location)}</dd><dt>검사 기록 시각</dt><dd>${escape(timestamp)}</dd></dl><p class="muted">${f.rule ? '탐지기가 보고한 규칙입니다. MASK는 실제 적용된 마스킹 조치를 뜻합니다.' : '사유 메타데이터가 제공되지 않았습니다.'}</p></article>`
+}
+
+export function sortRows(rows, direction = 'newest', key = 'timestamp') {
+  const sign = direction === 'oldest' ? 1 : -1
+  return rows.map((row, index) => ({ row, index })).sort((a, b) => {
+    const av = a.row[key]
+    const bv = b.row[key]
+    const aTime = typeof av === 'string' && !Number.isNaN(Date.parse(av)) ? Date.parse(av) : null
+    const bTime = typeof bv === 'string' && !Number.isNaN(Date.parse(bv)) ? Date.parse(bv) : null
+    if (key === 'timestamp') {
+      if (aTime === null || bTime === null) return aTime === bTime ? a.index - b.index : aTime === null ? 1 : -1
+      return (aTime - bTime) * sign || a.index - b.index
+    }
+    const result = String(av ?? '').localeCompare(String(bv ?? ''), 'ko') * (direction === 'desc' ? -1 : 1)
+    return result || a.index - b.index
+  }).map(item => item.row)
 }
 export function pipeline(events, demoDecision = null) {
   const activities = toolActivities(events)
