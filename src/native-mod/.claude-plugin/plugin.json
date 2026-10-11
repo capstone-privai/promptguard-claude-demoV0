@@ -1,7 +1,7 @@
 {
   "name": "promptguard-demo-v0",
   "version": "0.1.0",
-  "description": "CredSweeper-backed semantic sanitizer for PromptGuard Demo V0",
+  "description": "Multi-detector (CredSweeper, Gitleaks, in-house rules) consensus sanitizer for PromptGuard Demo V0",
   "author": {
     "name": "PromptGuard Demo V0"
   }

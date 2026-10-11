@@ -48,8 +48,13 @@ if (-not $claudeCommand) {
   }
 }
 
+$gitleaksCommand = Get-Command gitleaks -ErrorAction SilentlyContinue
+$gitleaksStatus = '없음 (선택 detector 모듈이므로 건너뜀; scoop install gitleaks 또는 GitHub release 설치)'
+if ($gitleaksCommand) { $gitleaksStatus = (& $gitleaksCommand.Source version) }
+
 Write-Host ''
 Write-Host 'PromptGuard Demo V0 설치 완료' -ForegroundColor Green
 Write-Host "Python: $version"
 Write-Host 'CredSweeper: 1.19.0 (ML OFF)'
+Write-Host "Gitleaks: $gitleaksStatus"
 Write-Host '다음 단계: sample-protected-project로 이동한 뒤 ..\start-promptguard.cmd 실행'

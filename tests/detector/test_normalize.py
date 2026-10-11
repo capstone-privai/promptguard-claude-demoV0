@@ -5,8 +5,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "src" / "credsweeper-adapter"))
-from worker import normalize, utf16_len  # noqa: E402
+sys.path.insert(0, str(ROOT / "src" / "detector"))
+from pgdetector.core import normalize, utf16_len  # noqa: E402
 
 def row(start, end, kind="TOKEN", rule="unit"):
     return {"cp_start": start, "cp_end": end, "type": kind, "rule_id": rule, "confidence": "moderate", "value_hash": "0" * 64}

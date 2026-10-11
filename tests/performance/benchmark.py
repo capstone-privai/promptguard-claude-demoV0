@@ -8,8 +8,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "src" / "credsweeper-adapter"))
-from worker import Adapter  # noqa: E402
+sys.path.insert(0, str(ROOT / "src" / "detector"))
+from pgdetector import load_detector  # noqa: E402
 
 SAMPLE = (ROOT / "fixtures" / "positive" / ".env").read_text(encoding="utf-8")
 
@@ -24,22 +24,22 @@ def measured(fn, count=40):
     return summary(values)
 
 def main():
-    adapter = Adapter()
+    detector = load_detector()
     deterministic = re.compile(r"(?i)(?:password|api_key|token)\s*=\s*([^\s]+)")
     results = {
         "A_baseline": measured(lambda: len(SAMPLE)),
         "B_mod_deterministic": measured(lambda: list(deterministic.finditer(SAMPLE))),
-        "C_mod_credsweeper_persistent": measured(lambda: adapter.scan(SAMPLE, "benchmark")),
-        "D_mod_credsweeper_guard": measured(lambda: (adapter.scan(SAMPLE, "mod"), adapter.scan(SAMPLE, "guard"))),
+        "C_mod_detector_persistent": measured(lambda: detector.scan(SAMPLE, "benchmark")),
+        "D_mod_detector_guard": measured(lambda: (detector.scan(SAMPLE, "mod"), detector.scan(SAMPLE, "guard"))),
     }
-    startup = measured(lambda: Adapter(), 5)
+    startup = measured(lambda: load_detector(), 5)
     large = {}
     for label, size in (("10KB", 10_000), ("100KB", 100_000), ("1MB", 1_000_000), ("5MB", 5_000_000)):
         unit = "HOST=db.internal PORT=5432 DATABASE=payments\n"
         text = (unit * (size // len(unit) + 1))[:size - 50] + "\nTOKEN=LargeToken_8qM3vK7pR2xN5sL9\n"
-        start = time.perf_counter(); result = adapter.scan(text, "large_output"); elapsed = (time.perf_counter() - start) * 1000
+        start = time.perf_counter(); result = detector.scan(text, "large_output"); elapsed = (time.perf_counter() - start) * 1000
         large[label] = {"bytes": len(text.encode()), "latency_ms": round(elapsed, 3), "findings": len(result["findings"]), "errors": result["errors"]}
-    output = {"configurations": results, "persistent_worker_startup": startup, "large_output": large, "note": "Detector microbenchmark; not end-to-end UI latency. D runs independent Mod and Guard scans."}
+    output = {**detector.describe(), "configurations": results, "persistent_worker_startup": startup, "large_output": large, "note": "Detector microbenchmark; not end-to-end UI latency. D runs independent Mod and Guard scans."}
     (ROOT / "outputs" / "latency-results.json").write_text(json.dumps(output, indent=2), encoding="utf-8")
     print(json.dumps(output))
 

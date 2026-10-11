@@ -1,4 +1,23 @@
 {
+  "detector": "ensemble",
+  "consensus": "majority",
+  "required_votes": 2,
+  "adapters": [
+    {
+      "name": "credsweeper",
+      "version": "1.19.0"
+    },
+    {
+      "name": "gitleaks",
+      "version": "8.30.1"
+    },
+    {
+      "name": "promptguard-rules",
+      "version": "0.1.0"
+    }
+  ],
+  "skipped": [],
+  "ml": false,
   "configurations": {
     "A_baseline": {
       "runs": 40,
@@ -10,49 +29,49 @@
       "runs": 40,
       "mean_ms": 0.002,
       "p50_ms": 0.002,
-      "p95_ms": 0.002
+      "p95_ms": 0.003
     },
-    "C_mod_credsweeper_persistent": {
+    "C_mod_detector_persistent": {
       "runs": 40,
-      "mean_ms": 0.491,
-      "p50_ms": 0.422,
-      "p95_ms": 0.809
+      "mean_ms": 23.844,
+      "p50_ms": 23.386,
+      "p95_ms": 26.396
     },
-    "D_mod_credsweeper_guard": {
+    "D_mod_detector_guard": {
       "runs": 40,
-      "mean_ms": 0.759,
-      "p50_ms": 0.679,
-      "p95_ms": 1.176
+      "mean_ms": 50.107,
+      "p50_ms": 49.142,
+      "p95_ms": 55.444
     }
   },
   "persistent_worker_startup": {
     "runs": 5,
-    "mean_ms": 2362.309,
-    "p50_ms": 2351.47,
-    "p95_ms": 2399.087
+    "mean_ms": 263.898,
+    "p50_ms": 249.341,
+    "p95_ms": 276.55
   },
   "large_output": {
     "10KB": {
       "bytes": 9985,
-      "latency_ms": 4.743,
+      "latency_ms": 35.085,
       "findings": 1,
       "errors": []
     },
     "100KB": {
       "bytes": 99985,
-      "latency_ms": 42.317,
+      "latency_ms": 89.808,
       "findings": 1,
       "errors": []
     },
     "1MB": {
       "bytes": 999985,
-      "latency_ms": 436.475,
+      "latency_ms": 733.968,
       "findings": 1,
       "errors": []
     },
     "5MB": {
       "bytes": 4999985,
-      "latency_ms": 2180.342,
+      "latency_ms": 3795.66,
       "findings": 1,
       "errors": []
     }
