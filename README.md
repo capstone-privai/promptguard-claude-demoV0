@@ -78,6 +78,20 @@ DB 연결이 실패하는 원인을 찾아줘.
 - Claude가 port mismatch를 원인으로 진단
 - raw-free audit은 `.runtime/audit/`에 생성
 
+## Placeholder 원복 (실행 직전 복원)
+
+모델은 `[PASSWORD_1]` 같은 placeholder만 보기 때문에, 모델이 만든 명령에도 placeholder가 들어갑니다. 그대로 실행하면 `psql` 접속이나 `.env` 수정이 실패하므로, Mod가 `tool.call` 훅에서 **실제 실행 직전에만** placeholder를 원래 값으로 되돌립니다.
+
+1. 마스킹할 때 `placeholder → 원래 값`을 Mod 프로세스 메모리(vault)에만 기록합니다. 파일, audit, 모델로는 내보내지 않습니다.
+2. 로컬에서 실행되는 도구(`Bash`, `PowerShell`, `Edit`, `MultiEdit`, `Write`, `NotebookEdit`, `Grep`)의 입력에서 알려진 placeholder를 원래 값으로 바꿔 실행합니다. 모르는 placeholder는 그대로 둡니다.
+3. `Agent`, `WebFetch`, MCP 도구처럼 입력이 다른 모델이나 외부로 나가는 도구는 원복하지 않습니다.
+4. 실행 결과에 원래 값이 다시 나오면(예: `echo`로 출력) CredSweeper가 놓치더라도 vault 기준으로 같은 placeholder로 다시 가립니다(re-mask).
+5. audit에는 값 없이 `restored_count`, `remasked_count` 개수만 남습니다.
+
+끄려면 `PG_RESTORE_PLACEHOLDERS=off`를 지정합니다. 테스트: `node --test tests/mod/test_restore.mjs`
+
+주의: Claude Code가 훅이 바꾼 도구 입력을 대화 기록에 그대로 남기는지는 이 demo에서 검증하지 않았습니다. 이후 요청의 history는 re-mask를 거치지만, 같은 turn 안의 provider 요청은 Final Guard가 없는 portable 모드에서 보장되지 않습니다.
+
 ## 3. 다른 프로젝트에서 실행
 
 Windows:
@@ -120,6 +134,6 @@ src/credsweeper-adapter/    CredSweeper worker + local MCP bridge
 src/guard/                  validation-only Final Guard mock
 sample-protected-project/   synthetic credential demo
 fixtures/                   labeled positive/negative corpus
-tests/                      detector/span/performance tests
+tests/                      detector/span/performance/Mod restore tests
 outputs/                    machine-readable validation results
 ```

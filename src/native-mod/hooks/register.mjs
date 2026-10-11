@@ -1,5 +1,13 @@
 const ledger = new Map()
 const counters = new Map()
+// placeholder -> raw value. Memory only: never audited, persisted, or sent to the model.
+const vault = new Map()
+// raw value -> placeholder, for re-masking raw values that come back from restored tool runs.
+const reverseVault = new Map()
+const PLACEHOLDER_PATTERN = /\[[A-Z0-9_]+_\d+\]/g
+// Tools that execute locally. Model-bound tools (Agent, WebFetch, ...) never get raw values.
+const RESTORE_TOOLS = new Set(['Bash', 'PowerShell', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Grep'])
+const TOOL_META_KEYS = new Set(['tool', 'tool_use_id'])
 const auditRows = []
 let detectorQueue = Promise.resolve()
 let auditQueue = Promise.resolve()
@@ -15,7 +23,7 @@ function typeName(value) {
   return String(value || 'CREDENTIAL').toUpperCase().replace(/[^A-Z0-9_]/g, '_') || 'CREDENTIAL'
 }
 
-function placeholder(finding) {
+function placeholder(finding, raw) {
   const kind = typeName(finding.type)
   const key = `${kind}:${finding.value_hash}`
   if (ledger.has(key)) return ledger.get(key)
@@ -23,7 +31,50 @@ function placeholder(finding) {
   counters.set(kind, next)
   const value = `[${kind}_${next}]`
   ledger.set(key, value)
+  vault.set(value, raw)
+  if (!reverseVault.has(raw)) reverseVault.set(raw, value)
   return value
+}
+
+function mapStrings(value, fn) {
+  if (typeof value === 'string') return fn(value)
+  if (Array.isArray(value)) return value.map(item => mapStrings(item, fn))
+  if (value && typeof value === 'object') {
+    const out = {}
+    for (const [key, item] of Object.entries(value)) out[key] = mapStrings(item, fn)
+    return out
+  }
+  return value
+}
+
+// Swaps placeholders the model wrote back to their raw values. Unknown placeholders stay as is.
+function restoreText(text, counter) {
+  return text.replace(PLACEHOLDER_PATTERN, match => {
+    if (!vault.has(match)) return match
+    counter.count++
+    return vault.get(match)
+  })
+}
+
+function restoreToolInput(e) {
+  const counter = { count: 0 }
+  const input = {}
+  for (const [key, item] of Object.entries(e)) input[key] = TOOL_META_KEYS.has(key) ? item : mapStrings(item, text => restoreText(text, counter))
+  return { input, restoredCount: counter.count }
+}
+
+// Replaces known raw values with their placeholders, even where the detector would miss them
+// (e.g. a restored password echoed alone on a line). Longest first so substrings never win.
+function remaskText(text, counter) {
+  if (!reverseVault.size) return text
+  let out = text
+  for (const raw of [...reverseVault.keys()].sort((a, b) => b.length - a.length)) {
+    if (!out.includes(raw)) continue
+    const parts = out.split(raw)
+    counter.count += parts.length - 1
+    out = parts.join(reverseVault.get(raw))
+  }
+  return out
 }
 
 function redactText(text, findings) {
@@ -34,7 +85,7 @@ function redactText(text, findings) {
     if (finding.offset_unit !== 'utf16_code_units') throw new Error('PromptGuard detector offset unit mismatch')
     if (!Number.isInteger(finding.start) || !Number.isInteger(finding.end) || finding.start < 0 || finding.end > text.length || finding.start >= finding.end) throw new Error('PromptGuard detector invalid span')
     if (finding.end > previousStart) throw new Error('PromptGuard detector overlapping normalized spans')
-    out = out.slice(0, finding.start) + placeholder(finding) + out.slice(finding.end)
+    out = out.slice(0, finding.start) + placeholder(finding, text.slice(finding.start, finding.end)) + out.slice(finding.end)
     previousStart = finding.start
   }
   return out
@@ -87,13 +138,15 @@ function rebuild(value, byId, cursor = { value: 0 }) {
 }
 
 async function sanitize($, value, source) {
-  const entries = collectStrings(value, source)
+  const remasked = { count: 0 }
+  const masked = mapStrings(value, text => remaskText(text, remasked))
+  const entries = collectStrings(masked, source)
   const scanned = await scanBatch($, entries)
   const byId = new Map(scanned.items.map(item => [item.id, item.findings]))
   const findings = scanned.items.flatMap(item => item.findings)
   const types = {}
   for (const finding of findings) types[finding.type] = (types[finding.type] || 0) + 1
-  return { value: rebuild(value, byId), findingCount: findings.length, types, latencyMs: scanned.latencyMs }
+  return { value: rebuild(masked, byId), findingCount: findings.length, remaskedCount: remasked.count, types, latencyMs: scanned.latencyMs }
 }
 
 async function appendAudit($, source, result, extra = {}) {
@@ -105,7 +158,8 @@ async function appendAudit($, source, result, extra = {}) {
     source,
     finding_count: result.findingCount,
     type_counts: result.types,
-    redacted_count: result.findingCount,
+    redacted_count: result.findingCount + (result.remaskedCount || 0),
+    remasked_count: result.remaskedCount || 0,
     blocked: false,
     reason: null,
     latency_ms: result.latencyMs,
@@ -164,13 +218,15 @@ export function register(on) {
 
   on('tool.call', async ($, e, next) => {
     if (e.tool === 'mcp__pgdetector__scan_batch') return next(e)
-    const result = await next(e)
-    if (result.deny !== undefined) return result
+    const restoreEnabled = RESTORE_TOOLS.has(e.tool) && await $.env.get('PG_RESTORE_PLACEHOLDERS') !== 'off'
+    const { input, restoredCount } = restoreEnabled ? restoreToolInput(e) : { input: e, restoredCount: 0 }
+    const result = await next(input)
+    if (result.deny !== undefined) return typeof result.deny === 'string' ? { ...result, deny: remaskText(result.deny, { count: 0 }) } : result
     const source = toolSource(e, result.isError === true)
     const sanitizedResult = await sanitize($, result.result, source)
     const sanitizedText = result.text === undefined ? undefined : (await sanitize($, result.text, source)).value
     const sanitizedContext = (await sanitize($, result.context, source)).value
-    await appendAudit($, source, sanitizedResult, { hook: 'tool.call', tool: e.tool, tool_use_id: e.tool_use_id, is_error: result.isError === true })
+    await appendAudit($, source, sanitizedResult, { hook: 'tool.call', tool: e.tool, tool_use_id: e.tool_use_id, is_error: result.isError === true, restored_count: restoredCount })
     if (result.isError === true) return { deny: String(sanitizedText ?? sanitizedResult.value ?? 'Tool call failed') }
     return { ...result, result: sanitizedResult.value, text: sanitizedText, context: sanitizedContext }
   })
