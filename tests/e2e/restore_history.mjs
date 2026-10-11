@@ -93,7 +93,7 @@ function run(command, args, options) {
 async function startDetector() {
   const port = 30001 + Math.floor(Math.random() * 5000)
   const env = { ...process.env, PG_DETECTOR_PORT: String(port), PG_DETECTOR_MODE: 'normal' }
-  const child = spawn(PYTHON, [path.join(ROOT, 'src/credsweeper-adapter/worker.py')], { cwd: ROOT, env, stdio: 'ignore' })
+  const child = spawn(PYTHON, [path.join(ROOT, 'src/detector/worker.py')], { cwd: ROOT, env, stdio: 'ignore' })
   const url = `http://127.0.0.1:${port}`
   for (let i = 0; i < 200; i++) {
     try { if ((await fetch(`${url}/health`)).ok) return { child, url } } catch {}
@@ -122,7 +122,7 @@ async function runScenario(name, scenario, detector) {
   fs.mkdirSync(workspace, { recursive: true })
   fs.writeFileSync(path.join(workspace, '.env'), `DB_HOST=demo-db.internal\nDB_PASSWORD=${RAW}\n`)
   const mcpConfig = path.join(dir, 'mcp.json')
-  fs.writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { pgdetector: { command: 'node', args: [path.join(ROOT, 'src/credsweeper-adapter/mcp-bridge.cjs')] } } }))
+  fs.writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { pgdetector: { command: 'node', args: [path.join(ROOT, 'src/detector/mcp-bridge.cjs')] } } }))
 
   const provider = await startProvider(scenario, workspace)
   const env = { ...process.env }

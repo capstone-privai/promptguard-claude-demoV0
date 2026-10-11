@@ -28,7 +28,7 @@ mkdir -p "$AUDIT_DIR"
 
 STAMP="$(date '+%Y%m%d-%H%M%S')"
 PORT=$((30001 + RANDOM % 7999))
-BRIDGE="$ROOT/src/credsweeper-adapter/mcp-bridge.cjs"
+BRIDGE="$ROOT/src/detector/mcp-bridge.cjs"
 MCP_CONFIG="$RUNTIME/mcp-$STAMP.json"
 
 node -e 'const fs=require("fs"); const path=process.argv[1]; const bridge=process.argv[2]; fs.writeFileSync(path, JSON.stringify({mcpServers:{pgdetector:{command:"node",args:[bridge]}}}, null, 2), "utf8");' "$MCP_CONFIG" "$BRIDGE"
@@ -41,7 +41,7 @@ export PG_SESSION_HASH
 PG_SESSION_HASH="$("$PYTHON" -c 'import hashlib, secrets; print(hashlib.sha256(secrets.token_bytes(32)).hexdigest())')"
 export CLAUDE_CODE_ENABLE_FUNCTION_HOOKS="1"
 
-WORKER="$ROOT/src/credsweeper-adapter/worker.py"
+WORKER="$ROOT/src/detector/worker.py"
 WORKER_PID=""
 
 stop_process_tree() {
@@ -87,13 +87,19 @@ while [[ "$ATTEMPT" -lt 200 ]]; do
 done
 
 if [[ "$READY" -ne 1 ]]; then
-  printf 'CredSweeper worker failed to start. See %s\n' "$RUNTIME/detector-$STAMP.stderr.log" >&2
+  printf 'Detector worker failed to start. See %s\n' "$RUNTIME/detector-$STAMP.stderr.log" >&2
   exit 1
 fi
 
 printf 'PromptGuard Native Mod — demo mode\n'
 printf 'Workspace: %s\n' "$(pwd)"
 printf 'Raw-free audit: %s\n' "$PG_MOD_AUDIT"
+curl --fail --silent --max-time 1 "$PG_DETECTOR_URL/health" | "$PYTHON" -c 'import json, sys
+health = json.load(sys.stdin)
+names = ", ".join(adapter["name"] for adapter in health["adapters"])
+print("Detector: %s (consensus %s, %d vote(s) needed)" % (names, health["consensus"], health["required_votes"]))
+for skipped in health["skipped"]:
+    print("Detector: skipped %s (%s)" % (skipped["name"], skipped["reason"]))' || true
 printf 'WARNING: this launcher is Mod-only; a provider-bound Final Guard is not included.\n' >&2
 
 set +e

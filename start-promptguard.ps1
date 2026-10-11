@@ -35,7 +35,7 @@ $auditDir = Join-Path $runtime 'audit'
 New-Item -ItemType Directory -Force -Path $auditDir | Out-Null
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $port = Get-Random -Minimum 30001 -Maximum 38000
-$bridge = Join-Path $root 'src\credsweeper-adapter\mcp-bridge.cjs'
+$bridge = Join-Path $root 'src\detector\mcp-bridge.cjs'
 $mcpConfig = Join-Path $runtime "mcp-$stamp.json"
 $mcpConfigJson = [ordered]@{
   mcpServers = [ordered]@{
@@ -53,19 +53,22 @@ $seed = [guid]::NewGuid().ToString()
 $env:PG_SESSION_HASH = (Get-FileHash -InputStream ([System.IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($seed))) -Algorithm SHA256).Hash.ToLowerInvariant()
 $env:CLAUDE_CODE_ENABLE_FUNCTION_HOOKS = '1'
 
-$worker = Join-Path $root 'src\credsweeper-adapter\worker.py'
+$worker = Join-Path $root 'src\detector\worker.py'
 $workerProcess = Start-Process $python -ArgumentList @($worker) -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtime "detector-$stamp.stdout.log") -RedirectStandardError (Join-Path $runtime "detector-$stamp.stderr.log") -PassThru
 try {
   $ready = $false
+  $health = $null
   for ($i=0; $i -lt 200; $i++) {
-    try { Invoke-RestMethod "http://127.0.0.1:$port/health" -TimeoutSec 1 | Out-Null; $ready = $true; break }
+    try { $health = Invoke-RestMethod "http://127.0.0.1:$port/health" -TimeoutSec 1; $ready = $true; break }
     catch { Start-Sleep -Milliseconds 100 }
   }
-  if (-not $ready -or $workerProcess.HasExited) { throw 'CredSweeper worker가 시작되지 않았습니다.' }
+  if (-not $ready -or $workerProcess.HasExited) { throw 'Detector worker가 시작되지 않았습니다.' }
 
   Write-Host 'PromptGuard Native Mod — 체험 모드' -ForegroundColor Cyan
   Write-Host "Workspace: $(Get-Location)"
   Write-Host "Raw-free audit: $env:PG_MOD_AUDIT"
+  Write-Host "Detector: $(($health.adapters | ForEach-Object { $_.name }) -join ', ') (consensus $($health.consensus), $($health.required_votes) vote(s) needed)"
+  foreach ($skipped in @($health.skipped)) { Write-Warning "Detector: $($skipped.name) 제외됨 ($($skipped.reason))" }
   Write-Warning '이 launcher는 Mod-only입니다. 실제 provider용 Final Guard는 포함하지 않습니다.'
 
   $args = @('--plugin-dir', (Join-Path $root 'src\native-mod'), '--mcp-config', $mcpConfig)

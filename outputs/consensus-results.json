@@ -1,0 +1,24 @@
+{
+  "status": "PASS",
+  "checks": {
+    "policy_any": true,
+    "policy_majority": true,
+    "policy_unanimous": true,
+    "policy_at_least_forms": true,
+    "policy_unreachable_threshold_refused": true,
+    "policy_unknown_mode_refused": true,
+    "any_keeps_every_vote": true,
+    "at_least_2_keeps_overlap_union": true,
+    "unanimous_rejects_partial_agreement": true,
+    "adjacent_spans_do_not_agree": true,
+    "one_adapter_counts_once": true,
+    "detectors_name_every_voter": true,
+    "adapter_failure_fails_closed": true,
+    "invalid_adapter_span_fails_closed": true,
+    "duplicate_names_refused": true,
+    "plugin_adapters_loaded_by_path": true,
+    "optional_missing_adapter_skipped": true,
+    "required_missing_adapter_refused": true,
+    "threshold_above_active_adapters_refused": true
+  }
+}

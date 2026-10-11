@@ -5,8 +5,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "src" / "credsweeper-adapter"))
-from worker import Adapter, utf16_len  # noqa: E402
+sys.path.insert(0, str(ROOT / "src" / "detector"))
+from pgdetector import load_detector  # noqa: E402
+from pgdetector.core import utf16_len  # noqa: E402
 
 EXPECTED = {
     ".env": [("MyS3cretPass!2026", "PASSWORD"), ("sk_test_PGDEMO_7xQ9mK2pR5vN8cL4", "API_KEY"), ("pgdemoToken_4mN8qR2vX7kP5sL9", "TOKEN")],
@@ -35,33 +36,54 @@ def expected_spans(text, specs):
         rows.append({"type": kind, "start": utf16_len(text[:start]), "end": utf16_len(text[:start + len(value)]), "source": "fixture"})
     return rows
 
-def main():
-    adapter = Adapter()
-    ground_truth = []
-    predicted = []
-    per_file = []
-    for name, specs in EXPECTED.items():
-        text = (ROOT / "fixtures" / "positive" / name).read_text(encoding="utf-8")
-        expected = expected_spans(text, specs)
-        result = adapter.scan(text, "fixture")
-        found = [{k: row[k] for k in ("type", "start", "end", "source")} for row in result["findings"]]
-        ground_truth += [(name, r["type"], r["start"], r["end"]) for r in expected]
-        predicted += [(name, r["type"], r["start"], r["end"]) for r in found]
-        per_file.append({"file": name, "expected": len(expected), "found": len(found), "errors": result["errors"]})
-    for path in sorted((ROOT / "fixtures" / "negative").iterdir()):
-        result = adapter.scan(path.read_text(encoding="utf-8"), "fixture")
-        predicted += [(path.name, r["type"], r["start"], r["end"]) for r in result["findings"]]
-        per_file.append({"file": path.name, "expected": 0, "found": len(result["findings"]), "errors": result["errors"]})
-    gt, pr = set(ground_truth), set(predicted)
+def score(gt, pr):
     tp, fp, fn = len(gt & pr), len(pr - gt), len(gt - pr)
     precision = tp / (tp + fp) if tp + fp else 0
     recall = tp / (tp + fn) if tp + fn else 0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0
     f2 = 5 * precision * recall / (4 * precision + recall) if precision + recall else 0
-    output = {"detector": "CredSweeper", "ml": False, "offset_unit": "utf16_code_units", "tp": tp, "fp": fp, "fn": fn, "precision": precision, "recall": recall, "f1": f1, "f2": f2, "false_positives": [{"file": f, "type": t, "start": s, "end": e} for f, t, s, e in sorted(pr - gt)], "false_negatives": [{"file": f, "type": t, "start": s, "end": e} for f, t, s, e in sorted(gt - pr)], "per_file": per_file, "ground_truth": [{"file": f, "expected_type": t, "expected_start": s, "expected_end": e} for f, t, s, e in ground_truth]}
+    return {"tp": tp, "fp": fp, "fn": fn, "precision": precision, "recall": recall, "f1": f1, "f2": f2}
+
+def predictions(detector, cases, ballots_of, required_votes=None):
+    predicted = set()
+    for name, text, ballots in cases:
+        findings, _ = detector.decide(text, "fixture", ballots_of(ballots), required_votes)
+        predicted |= {(name, r["type"], r["start"], r["end"]) for r in findings}
+    return predicted
+
+def main():
+    detector = load_detector()
+    cases = []
+    ground_truth = []
+    per_file = []
+    for name, specs in EXPECTED.items():
+        text = (ROOT / "fixtures" / "positive" / name).read_text(encoding="utf-8")
+        cases.append((name, text, specs))
+    for path in sorted((ROOT / "fixtures" / "negative").iterdir()):
+        cases.append((path.name, path.read_text(encoding="utf-8"), []))
+    # Every adapter scans each fixture once; policies are then replayed on the same ballots.
+    collected, adapter_errors = detector.collect([text for _, text, _ in cases])
+    scored = []
+    for (name, text, specs), ballots in zip(cases, collected):
+        expected = expected_spans(text, specs)
+        found, errors = detector.decide(text, "fixture", ballots)
+        ground_truth += [(name, r["type"], r["start"], r["end"]) for r in expected]
+        per_file.append({"file": name, "expected": len(expected), "found": len(found), "errors": sorted(set(adapter_errors + errors)), "votes": {adapter: len(rows) for adapter, rows in ballots.items()}})
+        scored.append((name, text, ballots))
+    gt = set(ground_truth)
+    pr = predictions(detector, scored, lambda ballots: ballots)
+    metrics = score(gt, pr)
+    voters = len(detector.adapters)
+    policy_comparison = [{"required_votes": k, "label": "any" if k == 1 else "unanimous" if k == voters else f"at_least:{k}", **score(gt, predictions(detector, scored, lambda ballots: ballots, k))} for k in range(1, voters + 1)]
+    per_adapter = {adapter.name: score(gt, predictions(detector, scored, lambda ballots, name=adapter.name: {name: ballots[name]}, 1)) for adapter in detector.adapters}
+    output = {**detector.describe(), "offset_unit": "utf16_code_units", **metrics, "adapter_errors": adapter_errors, "policy_comparison": policy_comparison, "per_adapter": per_adapter, "false_positives": [{"file": f, "type": t, "start": s, "end": e} for f, t, s, e in sorted(pr - gt)], "false_negatives": [{"file": f, "type": t, "start": s, "end": e} for f, t, s, e in sorted(gt - pr)], "per_file": per_file, "ground_truth": [{"file": f, "expected_type": t, "expected_start": s, "expected_end": e} for f, t, s, e in ground_truth]}
     (ROOT / "outputs" / "detector-metrics.json").write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({k: output[k] for k in ("tp", "fp", "fn", "precision", "recall", "f1", "f2")}))
-    raise SystemExit(0 if fp == 0 and fn == 0 else 1)
+    print(json.dumps({"consensus": output["consensus"], **metrics, "adapter_errors": adapter_errors}))
+    for row in policy_comparison:
+        print(f"  policy {row['label']:<12} tp={row['tp']:>2} fp={row['fp']:>2} fn={row['fn']:>2} f2={row['f2']:.3f}")
+    for name, row in per_adapter.items():
+        print(f"  adapter {name:<18} tp={row['tp']:>2} fp={row['fp']:>2} fn={row['fn']:>2} f2={row['f2']:.3f}")
+    raise SystemExit(0 if metrics["fp"] == 0 and metrics["fn"] == 0 and not adapter_errors else 1)
 
 if __name__ == "__main__":
     main()

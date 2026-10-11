@@ -45,7 +45,7 @@ test('real CredSweeper -> Native Mod -> safe audit -> mock Guard SAFE/BLOCKED an
   const detectorPort = await freePort()
   const guardPort = await freePort()
   const detectorUrl = `http://127.0.0.1:${detectorPort}`
-  const worker = await launch(python, ['src/credsweeper-adapter/worker.py'], { PG_DETECTOR_PORT: String(detectorPort), PG_DETECTOR_MODE: 'normal' }, '"ready": true')
+  const worker = await launch(python, ['src/detector/worker.py'], { PG_DETECTOR_PORT: String(detectorPort), PG_DETECTOR_MODE: 'normal' }, '"ready": true')
   let guard
   try {
     guard = await launch(process.execPath, ['src/guard/server.cjs'], { PG_GUARD_PORT: String(guardPort), PG_DETECTOR_URL: detectorUrl, PG_EVIDENCE_DIR: directory, PG_GUARD_MODE: 'normal', PG_SCENARIO: 'simple' }, 'READY')

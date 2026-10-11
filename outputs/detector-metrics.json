@@ -1,5 +1,22 @@
 {
-  "detector": "CredSweeper",
+  "detector": "ensemble",
+  "consensus": "majority",
+  "required_votes": 2,
+  "adapters": [
+    {
+      "name": "credsweeper",
+      "version": "1.19.0"
+    },
+    {
+      "name": "gitleaks",
+      "version": "8.30.1"
+    },
+    {
+      "name": "promptguard-rules",
+      "version": "0.1.0"
+    }
+  ],
+  "skipped": [],
   "ml": false,
   "offset_unit": "utf16_code_units",
   "tp": 32,
@@ -9,6 +26,71 @@
   "recall": 1.0,
   "f1": 1.0,
   "f2": 1.0,
+  "adapter_errors": [],
+  "policy_comparison": [
+    {
+      "required_votes": 1,
+      "label": "any",
+      "tp": 32,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "f2": 1.0
+    },
+    {
+      "required_votes": 2,
+      "label": "at_least:2",
+      "tp": 32,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "f2": 1.0
+    },
+    {
+      "required_votes": 3,
+      "label": "unanimous",
+      "tp": 8,
+      "fp": 0,
+      "fn": 24,
+      "precision": 1.0,
+      "recall": 0.25,
+      "f1": 0.4,
+      "f2": 0.29411764705882354
+    }
+  ],
+  "per_adapter": {
+    "credsweeper": {
+      "tp": 32,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "f2": 1.0
+    },
+    "gitleaks": {
+      "tp": 8,
+      "fp": 0,
+      "fn": 24,
+      "precision": 1.0,
+      "recall": 0.25,
+      "f1": 0.4,
+      "f2": 0.29411764705882354
+    },
+    "promptguard-rules": {
+      "tp": 32,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "f2": 1.0
+    }
+  },
   "false_positives": [],
   "false_negatives": [],
   "per_file": [
@@ -16,67 +98,122 @@
       "file": ".env",
       "expected": 3,
       "found": 3,
-      "errors": []
+      "errors": [],
+      "votes": {
+        "credsweeper": 3,
+        "gitleaks": 0,
+        "promptguard-rules": 3
+      }
     },
     {
       "file": "urls.txt",
       "expected": 4,
       "found": 4,
-      "errors": []
+      "errors": [],
+      "votes": {
+        "credsweeper": 4,
+        "gitleaks": 0,
+        "promptguard-rules": 4
+      }
     },
     {
       "file": "tokens.txt",
       "expected": 6,
       "found": 6,
-      "errors": []
+      "errors": [],
+      "votes": {
+        "credsweeper": 9,
+        "gitleaks": 3,
+        "promptguard-rules": 6
+      }
     },
     {
       "file": "config.json",
       "expected": 2,
       "found": 2,
-      "errors": []
+      "errors": [],
+      "votes": {
+        "credsweeper": 2,
+        "gitleaks": 0,
+        "promptguard-rules": 2
+      }
     },
     {
       "file": "config.yaml",
       "expected": 2,
       "found": 2,
-      "errors": []
+      "errors": [],
+      "votes": {
+        "credsweeper": 2,
+        "gitleaks": 0,
+        "promptguard-rules": 2
+      }
     },
     {
       "file": "app.log",
       "expected": 2,
       "found": 2,
-      "errors": []
+      "errors": [],
+      "votes": {
+        "credsweeper": 3,
+        "gitleaks": 0,
+        "promptguard-rules": 2
+      }
     },
     {
       "file": "mcp.json",
       "expected": 2,
       "found": 2,
-      "errors": []
+      "errors": [],
+      "votes": {
+        "credsweeper": 2,
+        "gitleaks": 0,
+        "promptguard-rules": 2
+      }
     },
     {
       "file": "repeat.txt",
       "expected": 3,
       "found": 3,
-      "errors": []
+      "errors": [],
+      "votes": {
+        "credsweeper": 3,
+        "gitleaks": 0,
+        "promptguard-rules": 3
+      }
     },
     {
       "file": "unicode.txt",
       "expected": 4,
       "found": 4,
-      "errors": []
+      "errors": [],
+      "votes": {
+        "credsweeper": 4,
+        "gitleaks": 1,
+        "promptguard-rules": 4
+      }
     },
     {
       "file": "private.pem",
       "expected": 4,
       "found": 4,
-      "errors": []
+      "errors": [],
+      "votes": {
+        "credsweeper": 4,
+        "gitleaks": 4,
+        "promptguard-rules": 4
+      }
     },
     {
       "file": "benign.env",
       "expected": 0,
       "found": 0,
-      "errors": []
+      "errors": [],
+      "votes": {
+        "credsweeper": 0,
+        "gitleaks": 0,
+        "promptguard-rules": 0
+      }
     }
   ],
   "ground_truth": [

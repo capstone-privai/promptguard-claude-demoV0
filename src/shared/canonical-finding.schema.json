@@ -10,6 +10,7 @@
     "value_hash": { "type": "string", "minLength": 64, "maxLength": 64 },
     "confidence": { "type": "string" },
     "rule_id": { "type": "string" },
+    "detectors": { "type": "array", "items": { "type": "string" } },
     "source": { "type": "string" },
     "offset_unit": { "const": "utf16_code_units" },
     "json_path": { "type": "string" },

@@ -74,8 +74,14 @@ else
   fi
 fi
 
+GITLEAKS_STATUS="not found (optional detector module will be skipped; macOS: brew install gitleaks)"
+if command -v gitleaks >/dev/null 2>&1; then
+  GITLEAKS_STATUS="$(gitleaks version 2>/dev/null || printf 'unknown version')"
+fi
+
 PYTHON_VERSION="$("$VENV_PYTHON" -c 'import platform; print(platform.python_version())')"
 printf '\nPromptGuard Demo V0 installation complete\n'
 printf 'Python: %s\n' "$PYTHON_VERSION"
 printf 'CredSweeper: 1.19.0 (ML OFF)\n'
+printf 'Gitleaks: %s\n' "$GITLEAKS_STATUS"
 printf 'Next: cd sample-protected-project && ../start-promptguard.sh\n'
