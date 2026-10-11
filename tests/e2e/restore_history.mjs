@@ -156,7 +156,9 @@ async function runScenario(name, scenario, detector) {
   const ph = provider.placeholder()
   const blocks = afterBash.length ? bashBlocks(afterBash.at(-1).body) : {}
   const audit1 = fs.existsSync(path.join(dir, 'audit-turn1.json')) ? JSON.parse(fs.readFileSync(path.join(dir, 'audit-turn1.json'), 'utf8')) : []
-  const bashAudit = audit1.find(row => row.tool === 'Bash') || {}
+  // The tool_started row carries the restore count; the tool result's scan row carries the re-mask count.
+  const bashStarted = audit1.find(row => row.tool === 'Bash' && row.event === 'tool_started') || {}
+  const bashScan = audit1.find(row => row.tool === 'Bash' && row.hook === 'tool.call' && row.event === 'scan_completed') || {}
 
   const checks = {
     claude_exit_0: first.code === 0 && second.code === 0,
@@ -170,15 +172,15 @@ async function runScenario(name, scenario, detector) {
   }
   if (name === 'file') {
     checks.command_ran_with_raw_value = proof === RAW
-    checks.audit_restored_count_1 = bashAudit.restored_count === 1
+    checks.audit_restored_count_1 = bashStarted.restored_count === 1
   }
   if (name === 'echo') {
     checks.echoed_raw_remasked_in_tool_result = blocks.toolResult?.includes(ph) === true
-    checks.audit_remasked_count_1 = bashAudit.remasked_count === 1
+    checks.audit_remasked_count_1 = bashScan.remasked_count === 1
   }
   if (name === 'off') {
     checks.command_ran_with_placeholder = proof === ph
-    checks.audit_restored_count_0 = bashAudit.restored_count === 0
+    checks.audit_restored_count_0 = bashStarted.restored_count === 0
   }
   return checks
 }

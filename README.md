@@ -85,7 +85,7 @@ DB 연결이 실패하는 원인을 찾아줘.
 1. 마스킹할 때 `placeholder → 원래 값`을 Mod 프로세스 메모리(vault)에만 기록합니다. 파일, audit, 모델로는 내보내지 않습니다.
 2. 로컬에서 실행되는 도구(`Bash`, `PowerShell`, `Edit`, `MultiEdit`, `Write`, `NotebookEdit`, `Grep`)의 입력에서 알려진 placeholder를 원래 값으로 바꿔 실행합니다. 모르는 placeholder는 그대로 둡니다.
 3. `Agent`, `WebFetch`, MCP 도구처럼 입력이 다른 모델이나 외부로 나가는 도구는 원복하지 않습니다.
-4. 실행 결과에 원래 값이 다시 나오면(예: `echo`로 출력) CredSweeper가 놓치더라도 vault 기준으로 같은 placeholder로 다시 가립니다(re-mask).
+4. 실행 결과에 원래 값이 다시 나오면(예: `echo`로 출력), CredSweeper 검사 뒤에 vault 기준으로 한 번 더 확인해 탐지기가 놓친 값을 같은 placeholder로 다시 가립니다(re-mask).
 5. audit에는 값 없이 `restored_count`, `remasked_count` 개수만 남습니다.
 
 끄려면 `PG_RESTORE_PLACEHOLDERS=off`를 지정합니다.
@@ -151,3 +151,22 @@ fixtures/                   labeled positive/negative corpus
 tests/                      detector/span/performance/Mod restore/E2E tests
 outputs/                    machine-readable validation results
 ```
+
+## Observability Web UI
+
+기존 launcher는 그대로 사용합니다. 별도 터미널에서 Node.js 22 이상으로 실행하세요.
+
+```bash
+node src/observability/server.mjs
+```
+
+브라우저에서 `http://127.0.0.1:18880`을 열면 `.runtime/audit/`의 최신 Mod audit를 읽습니다.
+`PG_MOD_AUDIT`로 특정 audit 파일을 지정할 수 있습니다. UI 실행에는 npm 패키지가 필요하지 않습니다.
+
+- Pipeline, session summary, event timeline, detector/rule/span 상세, Read/tool activity, replacement preview
+- Live 데이터와 완전히 분리된 **DEMO / MOCK** 시나리오 선택
+- 실제 provider-bound 검증이 없으므로 최종 Cloud egress는 항상 **NOT VERIFIED**
+- 실제 원문이나 raw tool output을 브라우저로 보내지 않음
+- Turn ID, 파일 경로, 고유 파일 수와 미제공 metadata는 추측하지 않고 unavailable 표시
+
+[구조·보안 경계·실행 및 테스트 설명](docs/OBSERVABILITY.md)
