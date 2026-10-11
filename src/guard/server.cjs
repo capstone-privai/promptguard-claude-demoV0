@@ -52,22 +52,7 @@ async function inspect(value) {
     findingCount += item.findings.length
     for (const finding of item.findings) types[finding.type] = (types[finding.type] || 0) + 1
   }
-  return { rawCount: findingCount, placeholderCount: placeholderCount(value), rawPaths: paths, typeCounts: types, latencyMs: Date.now() - started }
-}
-
-function messageShape(messages) {
-  return (messages || []).map((message, messageIndex) => ({
-    message_index: messageIndex,
-    role: message.role,
-    blocks: Array.isArray(message.content) ? message.content.map((block, blockIndex) => ({
-      block_index: blockIndex,
-      type: block?.type,
-      id: block?.id,
-      name: block?.name,
-      tool_use_id: block?.tool_use_id,
-      is_error: block?.is_error,
-    })) : typeof message.content,
-  }))
+  return { rawCount: findingCount, placeholderCount: placeholderCount(value), rawPaths: paths, typeCounts: types, latencyMs: Date.now() - started, payloadCount: items.length }
 }
 
 function writeJson(name, value) {
@@ -209,7 +194,8 @@ const server = http.createServer((req, res) => {
     const record = {
       request_index: requestIndex,
       method: req.method,
-      endpoint: url,
+      endpoint: isMessages ? '/v1/messages' : isCountTokens ? '/v1/messages/count_tokens' : 'UNKNOWN',
+      timestamp: new Date().toISOString(),
       scenario,
       guard_mode: mode,
       body_bytes: size,
@@ -251,10 +237,9 @@ const server = http.createServer((req, res) => {
         guard_inspected: true,
         raw_marker_count: inspected.rawCount,
         placeholder_count: inspected.placeholderCount,
-        raw_paths: inspected.rawPaths,
+        scanned_payload_count: inspected.payloadCount,
         type_counts: inspected.typeCounts,
         detector_latency_ms: inspected.latencyMs,
-        message_shape: messageShape(body.messages),
       })
       if (!known) throw Object.assign(new Error('unknown endpoint denied'), { code: 'UNKNOWN_ENDPOINT' })
       if (inspected.rawCount > 0 && mode !== 'allow_raw') throw Object.assign(new Error('raw synthetic secret candidate'), { code: 'RAW_FOUND' })
