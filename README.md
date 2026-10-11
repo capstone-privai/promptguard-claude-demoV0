@@ -78,6 +78,34 @@ DB 연결이 실패하는 원인을 찾아줘.
 - Claude가 port mismatch를 원인으로 진단
 - raw-free audit은 `.runtime/audit/`에 생성
 
+## Placeholder 원복 (실행 직전 복원)
+
+모델은 `[PASSWORD_1]` 같은 placeholder만 보기 때문에, 모델이 만든 명령에도 placeholder가 들어갑니다. 그대로 실행하면 `psql` 접속이나 `.env` 수정이 실패하므로, Mod가 `tool.call` 훅에서 **실제 실행 직전에만** placeholder를 원래 값으로 되돌립니다.
+
+1. 마스킹할 때 `placeholder → 원래 값`을 Mod 프로세스 메모리(vault)에만 기록합니다. 파일, audit, 모델로는 내보내지 않습니다.
+2. 로컬에서 실행되는 도구(`Bash`, `PowerShell`, `Edit`, `MultiEdit`, `Write`, `NotebookEdit`, `Grep`)의 입력에서 알려진 placeholder를 원래 값으로 바꿔 실행합니다. 모르는 placeholder는 그대로 둡니다.
+3. `Agent`, `WebFetch`, MCP 도구처럼 입력이 다른 모델이나 외부로 나가는 도구는 원복하지 않습니다.
+4. 실행 결과에 원래 값이 다시 나오면(예: `echo`로 출력), CredSweeper 검사 뒤에 vault 기준으로 한 번 더 확인해 탐지기가 놓친 값을 같은 placeholder로 다시 가립니다(re-mask).
+5. audit에는 값 없이 `restored_count`, `remasked_count` 개수만 남습니다.
+
+끄려면 `PG_RESTORE_PLACEHOLDERS=off`를 지정합니다.
+
+### 원복한 값이 모델로 다시 실려 가는가? (E2E 검증)
+
+실제 Claude Code CLI + Native Mod + CredSweeper worker를 가짜 Anthropic API에 연결해, provider로 나가는 요청을 전부 기록하고 확인했습니다 (Claude Code 2.1.296에서 확인).
+
+- Claude Code는 대화 기록에 **모델이 쓴 원래 입력**(`[PASSWORD_1]`이 든 명령)을 남기고, 훅이 바꾼 입력(원래 값)은 실행에만 씁니다. 같은 turn의 후속 요청, `--resume`한 다음 turn 요청, 로컬 transcript(`.jsonl`) 어디에도 원래 값이 없습니다.
+- 다만 원복된 명령이 원래 값을 **출력**하면(예: `printf`로 값만 출력) CredSweeper는 `key=value` 문맥이 없어 탐지하지 못합니다. 이 경우는 re-mask가 막습니다. re-mask를 끄고 돌리면 원래 값이 provider 요청과 transcript에 그대로 실려 가는 것을 확인했습니다.
+
+테스트:
+
+```bash
+node --test tests/mod/test_restore.mjs   # 단위 테스트 (가짜 detector)
+node tests/e2e/restore_history.mjs       # E2E (설치 후, Claude Code와 .venv 필요)
+```
+
+E2E 증거(기록된 provider 요청, audit)는 `.runtime/e2e-restore/`에 남습니다.
+
 ## 3. 다른 프로젝트에서 실행
 
 Windows:
@@ -120,7 +148,7 @@ src/credsweeper-adapter/    CredSweeper worker + local MCP bridge
 src/guard/                  validation-only Final Guard mock
 sample-protected-project/   synthetic credential demo
 fixtures/                   labeled positive/negative corpus
-tests/                      detector/span/performance tests
+tests/                      detector/span/performance/Mod restore/E2E tests
 outputs/                    machine-readable validation results
 ```
 
