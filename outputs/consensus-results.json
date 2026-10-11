@@ -12,7 +12,7 @@
     "unanimous_rejects_partial_agreement": true,
     "adjacent_spans_do_not_agree": true,
     "one_adapter_counts_once": true,
-    "rule_id_names_every_voter": true,
+    "detectors_name_every_voter": true,
     "adapter_failure_fails_closed": true,
     "invalid_adapter_span_fails_closed": true,
     "duplicate_names_refused": true,

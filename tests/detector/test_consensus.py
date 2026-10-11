@@ -75,7 +75,7 @@ def main():
     found, _ = spans(Detector([stub("a", (6, 10), (8, 12)), stub("b")], parse("at_least:2")))
     checks["one_adapter_counts_once"] = found == []
     found, result = spans(Detector([stub("a", (6, 10)), stub("b", (6, 10))], parse("unanimous")))
-    checks["rule_id_names_every_voter"] = found == [(6, 10)] and result["findings"][0]["rule_id"] == "a:stub+b:stub"
+    checks["detectors_name_every_voter"] = found == [(6, 10)] and result["findings"][0]["detectors"] == ["a", "b"] and result["findings"][0]["rule_id"] == "stub"
 
     _, result = spans(Detector([stub("a", (6, 10)), stub("b", fail=True)], parse("any")))
     checks["adapter_failure_fails_closed"] = result["ok"] is False and result["errors"] == ["ADAPTER_FAILURE:b"]

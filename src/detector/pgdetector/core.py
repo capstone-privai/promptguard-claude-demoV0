@@ -105,6 +105,10 @@ def joined_rule_ids(*rule_ids: str) -> str:
     return "+".join(sorted({part for rule_id in rule_ids for part in rule_id.split("+")}))
 
 
+def joined_detectors(*items: dict[str, Any]) -> list[str]:
+    return sorted({name for item in items for name in item.get("detectors", [])})
+
+
 def normalize(raw: list[dict[str, Any]], text: str, source: str) -> tuple[list[dict[str, Any]], list[str]]:
     valid: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -130,9 +134,10 @@ def normalize(raw: list[dict[str, Any]], text: str, source: str) -> tuple[list[d
     for item in valid:
         key = (item["cp_start"], item["cp_end"], item["type"])
         if key in seen:
-            # Keep every agreeing rule in rule_id so the audit shows who voted.
+            # Keep every agreeing rule and adapter so the audit shows who voted.
             kept = seen[key]
             kept["rule_id"] = joined_rule_ids(kept["rule_id"], item["rule_id"])
+            kept["detectors"] = joined_detectors(kept, item)
             kept["confidence"] = "strong" if "strong" in {kept["confidence"], item["confidence"]} else kept["confidence"]
             continue
         seen[key] = item
@@ -153,6 +158,7 @@ def normalize(raw: list[dict[str, Any]], text: str, source: str) -> tuple[list[d
         previous["cp_end"] = union_end
         previous["type"] = previous["type"] if previous["type"] != "CREDENTIAL" else item["type"]
         previous["rule_id"] = joined_rule_ids(previous["rule_id"], item["rule_id"])
+        previous["detectors"] = joined_detectors(previous, item)
         previous["confidence"] = "strong" if "strong" in {previous["confidence"], item["confidence"]} else previous["confidence"]
         previous["value_hash"] = value_hash(text[union_start:union_end])
 
@@ -167,6 +173,7 @@ def normalize(raw: list[dict[str, Any]], text: str, source: str) -> tuple[list[d
         output.append({
             "type": item["type"],
             "rule_id": item["rule_id"],
+            "detectors": sorted(item.get("detectors", [])),
             "confidence": item["confidence"],
             "value_hash": item["value_hash"],
             "start": start,

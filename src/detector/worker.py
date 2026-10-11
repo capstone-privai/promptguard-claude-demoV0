@@ -6,11 +6,15 @@ Serves the adapter ensemble described in detector.json over localhost HTTP.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from pgdetector import Detector, load_detector
+# Detector diagnostics can contain candidate text. Only explicit raw-free status is emitted.
+logging.disable(logging.CRITICAL)
+
+from pgdetector import Detector, load_detector  # noqa: E402
 
 
 HOST = "127.0.0.1"

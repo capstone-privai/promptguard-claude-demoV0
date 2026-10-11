@@ -145,7 +145,7 @@ launcher는 시작할 때 활성 모듈과 정책을 출력합니다(`Detector: 
 
 - 서로 다른 모듈의 span이 한 글자라도 겹치면 같은 영역에 동의한 것으로 셉니다. 도구마다 `key=value` 전체를 잡거나 값만 잡는 등 경계가 다르기 때문입니다. 같은 모듈이 여러 번 탐지해도 1표입니다.
 - 채택된 영역은 동의한 span들의 합집합으로 가립니다. 일부 모듈이 값을 짧게 잡아도 나머지 부분이 노출되지 않게 하기 위해서입니다.
-- finding의 `rule_id`에는 동의한 모듈과 룰이 `credsweeper:Password+promptguard-rules:secret-assignment` 형식으로 남습니다.
+- finding의 `detectors`에는 동의한 모듈 이름(`["credsweeper", "promptguard-rules"]`)이, `rule_id`에는 V0와 같은 형식으로 각 모듈의 룰 이름이 `+`로 이어져(`Password+secret-assignment`) 남습니다.
 - 실행 중 한 모듈이라도 실패하면 해당 요청은 `ADAPTER_FAILURE:<이름>` 오류로 fail-closed 됩니다.
 - `required: false` 모듈은 도구가 설치되지 않았으면 시작 시 제외되고, 투표 수(N)에서도 빠집니다. 활성 모듈 수보다 큰 `at_least` 값은 아무것도 가리지 못하게 되므로 worker가 시작을 거부합니다.
 
