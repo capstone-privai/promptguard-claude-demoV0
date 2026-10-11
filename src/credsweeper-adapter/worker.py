@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -13,6 +14,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+# Detector diagnostics can contain candidate text. Only explicit raw-free status is emitted.
+logging.disable(logging.CRITICAL)
 
 from credsweeper import CredSweeper, StringContentProvider, __version__ as CREDSWEEPER_VERSION
 

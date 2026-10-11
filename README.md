@@ -123,3 +123,22 @@ fixtures/                   labeled positive/negative corpus
 tests/                      detector/span/performance tests
 outputs/                    machine-readable validation results
 ```
+
+## Observability Web UI
+
+기존 launcher는 그대로 사용합니다. 별도 터미널에서 Node.js 22 이상으로 실행하세요.
+
+```bash
+node src/observability/server.mjs
+```
+
+브라우저에서 `http://127.0.0.1:18880`을 열면 `.runtime/audit/`의 최신 Mod audit를 읽습니다.
+`PG_MOD_AUDIT`로 특정 audit 파일을 지정할 수 있습니다. UI 실행에는 npm 패키지가 필요하지 않습니다.
+
+- Pipeline, session summary, event timeline, detector/rule/span 상세, Read/tool activity, replacement preview
+- Live 데이터와 완전히 분리된 **DEMO / MOCK** 시나리오 선택
+- 실제 provider-bound 검증이 없으므로 최종 Cloud egress는 항상 **NOT VERIFIED**
+- 실제 원문이나 raw tool output을 브라우저로 보내지 않음
+- Turn ID, 파일 경로, 고유 파일 수와 미제공 metadata는 추측하지 않고 unavailable 표시
+
+[구조·보안 경계·실행 및 테스트 설명](docs/OBSERVABILITY.md)

@@ -3,6 +3,7 @@ const counters = new Map()
 const auditRows = []
 let detectorQueue = Promise.resolve()
 let auditQueue = Promise.resolve()
+let toolOperation = 0
 
 function collectStrings(value, source, entries = []) {
   if (typeof value === 'string') entries.push({ id: entries.length, text: value, source })
@@ -57,21 +58,25 @@ async function scanBatch($, entries) {
   return { items: value.items, latencyMs: Date.now() - started }
 }
 
-async function appendFailureAudit($, source, error) {
+async function appendFailureAudit($, source, error, extra = {}) {
   const path = await $.env.get('PG_MOD_AUDIT')
   if (!path) return
   const row = {
     timestamp: new Date().toISOString(),
     session_id_hash: await $.env.get('PG_SESSION_HASH') || 'unavailable',
     source,
-    finding_count: 0,
+    finding_count: null,
     type_counts: {},
-    redacted_count: 0,
+    redacted_count: null,
     blocked: true,
-    reason: String(error?.message || 'MOD_FAILURE').slice(0, 160),
+    reason: error?.pgStage === 'sanitizer' ? 'SANITIZER_FAILURE' : 'DETECTOR_FAILURE',
+    event: 'scan_failed',
+    hook: extra.hook, tool: auditTool(extra.tool), operation: extra.operation,
+    failure_stage: error?.pgStage === 'sanitizer' ? 'sanitizer' : 'detector',
     latency_ms: 0,
   }
-  auditQueue = auditQueue.then(() => $.fs.write(path, JSON.stringify([...auditRows, row], null, 2))).catch(() => {})
+  auditRows.push(row)
+  auditQueue = auditQueue.then(() => $.fs.write(path, JSON.stringify(auditRows, null, 2))).catch(() => {})
   await auditQueue
 }
 
@@ -93,7 +98,18 @@ async function sanitize($, value, source) {
   const findings = scanned.items.flatMap(item => item.findings)
   const types = {}
   for (const finding of findings) types[finding.type] = (types[finding.type] || 0) + 1
-  return { value: rebuild(value, byId), findingCount: findings.length, types, latencyMs: scanned.latencyMs }
+  let sanitized
+  try { sanitized = rebuild(value, byId) }
+  catch (error) { error.pgStage = 'sanitizer'; throw error }
+  // Never retain text, hashes, object keys, or caller-provided error messages in audit.
+  const details = scanned.items.flatMap(item => item.findings.map(finding => ({
+    detector: item.detector === 'CredSweeper' ? 'CredSweeper' : undefined,
+    secret_type: typeName(finding.type), rule_id: finding.rule_id,
+    payload_index: item.id, start: finding.start, end: finding.end,
+    offset_unit: finding.offset_unit, action: 'MASK', placeholder: placeholder(finding),
+  })))
+  return { value: sanitized, findingCount: findings.length, types, latencyMs: scanned.latencyMs,
+    scannedPayloadCount: entries.length, findings: details }
 }
 
 async function appendAudit($, source, result, extra = {}) {
@@ -103,13 +119,19 @@ async function appendAudit($, source, result, extra = {}) {
     timestamp: new Date().toISOString(),
     session_id_hash: await $.env.get('PG_SESSION_HASH') || 'unavailable',
     source,
+    event: extra.event || 'scan_completed',
+    operation: extra.operation,
+    scanned_payload_count: result.scannedPayloadCount,
+    findings: result.findings,
     finding_count: result.findingCount,
     type_counts: result.types,
     redacted_count: result.findingCount,
     blocked: false,
     reason: null,
     latency_ms: result.latencyMs,
-    ...extra,
+    hook: extra.hook,
+    tool: auditTool(extra.tool),
+    is_error: extra.is_error,
   })
   auditQueue = auditQueue.then(() => $.fs.write(path, JSON.stringify(auditRows, null, 2))).catch(() => {})
   await auditQueue
@@ -121,9 +143,15 @@ async function sanitizeAndAudit($, value, source, extra = {}) {
     await appendAudit($, source, result, extra)
     return result.value
   } catch (error) {
-    await appendFailureAudit($, source, error)
-    throw error
+    await appendFailureAudit($, source, error, extra)
+    throw new Error(error?.pgStage === 'sanitizer' ? 'PromptGuard sanitizer failure' : 'PromptGuard detector failure')
   }
+}
+
+function auditTool(tool) {
+  if (['Read', 'Grep', 'Bash', 'Agent'].includes(tool)) return tool
+  if (typeof tool === 'string' && tool.startsWith('mcp__')) return 'MCP tool'
+  return tool ? 'Other tool' : undefined
 }
 
 function toolSource(e, isError) {
@@ -139,14 +167,14 @@ export function register(on) {
   on('prompt.submit', async ($, e, next) => {
     if (await $.env.get('PG_MOD_FAILURE_MODE') === 'throw') throw new Error('synthetic Mod failure')
     const text = await sanitizeAndAudit($, e.text, 'user_prompt', { hook: 'prompt.submit' })
-    const context = (await sanitize($, e.context, 'history')).value
+    const context = await sanitizeAndAudit($, e.context, 'history', { hook: 'prompt.submit' })
     return next({ ...e, text, context })
   })
 
   on('prompt.context', async ($, e, next) => {
     const blocks = []
     for (const block of e.blocks) blocks.push({ ...block, text: await sanitizeAndAudit($, block.text, 'claude_md', { hook: 'prompt.context' }) })
-    return next({ ...e, blocks, instructionFiles: (await sanitize($, e.instructionFiles, 'claude_md')).value })
+    return next({ ...e, blocks, instructionFiles: (await sanitizeAndAudit($, e.instructionFiles, 'claude_md', { hook: 'prompt.context' })) })
   })
 
   on('prompt.section', async ($, e, next) => e.text === null ? next(e) : next({ ...e, text: await sanitizeAndAudit($, e.text, 'automatic_context', { hook: 'prompt.section', name: e.name }) }))
@@ -160,27 +188,39 @@ export function register(on) {
 
   on('prompt.attachment', async ($, e, next) => next({ ...e, text: await sanitizeAndAudit($, e.text, 'automatic_context', { hook: 'prompt.attachment', type: e.type }) }))
   on('skill.prompt', async ($, e, next) => next({ ...e, text: await sanitizeAndAudit($, e.text, 'automatic_context', { hook: 'skill.prompt', skill: e.skill }) }))
-  on('agent.spawn', async ($, e, next) => next({ ...e, prompt: await sanitizeAndAudit($, e.prompt, 'subagent', { hook: 'agent.spawn' }), description: (await sanitize($, e.description, 'subagent')).value }))
+  on('agent.spawn', async ($, e, next) => next({ ...e, prompt: await sanitizeAndAudit($, e.prompt, 'subagent', { hook: 'agent.spawn' }), description: (await sanitizeAndAudit($, e.description, 'subagent', { hook: 'agent.spawn' })) }))
 
   on('tool.call', async ($, e, next) => {
     if (e.tool === 'mcp__pgdetector__scan_batch') return next(e)
-    const result = await next(e)
-    if (result.deny !== undefined) return result
+    const operation = ++toolOperation
+    const lifecycle = { findingCount: null, types: {}, latencyMs: 0, findings: [] }
+    const extra = { hook: 'tool.call', tool: e.tool, operation }
+    await appendAudit($, toolSource(e, false), lifecycle, { ...extra, event: 'tool_started' })
+    let result
+    try { result = await next(e) }
+    catch {
+      await appendAudit($, toolSource(e, false), lifecycle, { ...extra, event: 'tool_failed' })
+      throw new Error('PromptGuard tool execution failure')
+    }
+    if (result.deny !== undefined) {
+      await appendAudit($, toolSource(e, false), lifecycle, { ...extra, event: 'tool_denied' })
+      return result
+    }
     const source = toolSource(e, result.isError === true)
-    const sanitizedResult = await sanitize($, result.result, source)
-    const sanitizedText = result.text === undefined ? undefined : (await sanitize($, result.text, source)).value
-    const sanitizedContext = (await sanitize($, result.context, source)).value
-    await appendAudit($, source, sanitizedResult, { hook: 'tool.call', tool: e.tool, tool_use_id: e.tool_use_id, is_error: result.isError === true })
+    extra.is_error = result.isError === true
+    const sanitizedResult = { value: await sanitizeAndAudit($, result.result, source, extra) }
+    const sanitizedText = result.text === undefined ? undefined : await sanitizeAndAudit($, result.text, source, { ...extra, hook: 'tool.call.text' })
+    const sanitizedContext = await sanitizeAndAudit($, result.context, source, { ...extra, hook: 'tool.call.context' })
     if (result.isError === true) return { deny: String(sanitizedText ?? sanitizedResult.value ?? 'Tool call failed') }
     return { ...result, result: sanitizedResult.value, text: sanitizedText, context: sanitizedContext }
   })
 
   on('session.compact', async ($, e, next) => {
-    const messages = (await sanitize($, e.messages, 'history')).value.map(message => { const { handle, ...built } = message; return built })
+    const messages = (await sanitizeAndAudit($, e.messages, 'history', { hook: 'session.compact' })).map(message => { const { handle, ...built } = message; return built })
     const instructions = e.instructions === undefined ? undefined : await sanitizeAndAudit($, e.instructions, 'history', { hook: 'session.compact', trigger: e.trigger })
     const result = await next({ ...e, messages, instructions })
     if (result.skip !== undefined) return result
-    const sanitized = (await sanitize($, result.messages, 'history')).value.map(message => { const { handle, ...built } = message; return built })
+    const sanitized = (await sanitizeAndAudit($, result.messages, 'history', { hook: 'session.compact' })).map(message => { const { handle, ...built } = message; return built })
     return { ...result, messages: sanitized }
   })
 

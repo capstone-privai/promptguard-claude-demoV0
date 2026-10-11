@@ -1,0 +1,91 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import net from 'node:net'
+import { projectAudit, projectGuard } from '../../src/observability/model.mjs'
+const python = process.env.PROMPTGUARD_PYTHON || (process.platform === 'win32' ? '.venv/Scripts/python.exe' : '.venv/bin/python')
+async function freePort() {
+  const server = net.createServer()
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = server.address().port
+  await new Promise(resolve => server.close(resolve))
+  return port
+}
+async function launch(command, args, env, ready) {
+  const child = spawn(command, args, { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })
+  let output = ''
+  let diagnostics = ''
+  child.stderr.on('data', chunk => { diagnostics += chunk })
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { child.kill(); reject(new Error('SERVICE_START_TIMEOUT')) }, 20000)
+    child.once('error', () => { clearTimeout(timer); reject(new Error('SERVICE_START_FAILED')) })
+    child.once('exit', () => { clearTimeout(timer); reject(new Error('SERVICE_EXITED')) })
+    child.stdout.on('data', chunk => { output += chunk; if (output.includes(ready)) { clearTimeout(timer); resolve() } })
+  })
+  return { child, diagnostics: () => output + diagnostics }
+}
+async function stop(child) {
+  if (child.exitCode === null && child.signalCode === null) {
+    await new Promise(resolve => {
+      child.once('exit', resolve)
+      if (process.platform === 'win32') child.kill()
+      else process.kill(-child.pid, 'SIGTERM')
+    })
+  }
+  child.stdout.destroy()
+  child.stderr.destroy()
+}
+
+test('real CredSweeper -> Native Mod -> safe audit -> mock Guard SAFE/BLOCKED and detector failure', { skip: !existsSync(python), timeout: 60000 }, async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'pg-observability-integration-'))
+  const detectorPort = await freePort()
+  const guardPort = await freePort()
+  const detectorUrl = `http://127.0.0.1:${detectorPort}`
+  const worker = await launch(python, ['src/credsweeper-adapter/worker.py'], { PG_DETECTOR_PORT: String(detectorPort), PG_DETECTOR_MODE: 'normal' }, '"ready": true')
+  let guard
+  try {
+    guard = await launch(process.execPath, ['src/guard/server.cjs'], { PG_GUARD_PORT: String(guardPort), PG_DETECTOR_URL: detectorUrl, PG_EVIDENCE_DIR: directory, PG_GUARD_MODE: 'normal', PG_SCENARIO: 'simple' }, 'READY')
+    const callbacks = new Map()
+    const { register } = await import(`../../src/native-mod/hooks/register.mjs?integration=${Date.now()}`)
+    register((name, fn) => callbacks.set(name, fn))
+    let audit = []
+    const $ = {
+      env: { get: async key => ({ PG_MOD_AUDIT: 'memory', PG_SESSION_HASH: 'b'.repeat(64) }[key]) },
+      fs: { write: async (_name, value) => { audit = JSON.parse(value) } },
+      mcp: { call: async (_server, _tool, { items }) => {
+        const response = await fetch(`${detectorUrl}/scan-batch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items }) })
+        return { content: [{ type: 'text', text: JSON.stringify(await response.json()) }] }
+      } },
+    }
+    const fixture = await readFile('fixtures/positive/.env', 'utf8')
+    const expectedValues = fixture.split('\n').filter(line => /PASSWORD|API_KEY|TOKEN/.test(line)).map(line => line.slice(line.indexOf('=') + 1)).filter(Boolean)
+    const prompt = await callbacks.get('prompt.submit')($, { text: fixture, context: [] }, async e => e)
+    const read = await callbacks.get('tool.call')($, { tool: 'Read' }, async () => ({ result: fixture, context: [] }))
+    const shell = await callbacks.get('tool.call')($, { tool: 'Bash' }, async () => ({ result: fixture, context: [] }))
+    assert.equal(audit.filter(row => row.event === 'scan_completed').reduce((n, row) => n + row.finding_count, 0), 9)
+    assert.equal(projectAudit(audit).flatMap(e => e.findings).length, 9)
+    const send = text => fetch(`http://127.0.0.1:${guardPort}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: text }] }) })
+    assert.equal((await send(prompt.text)).status, 200)
+    const safe = projectGuard(JSON.parse(await readFile(path.join(directory, 'request-001.json'), 'utf8')))
+    assert.equal(safe.decision, 'SAFE')
+    assert.equal(safe.remaining, 0)
+    assert.equal((await send(fixture)).status, 422)
+    const blocked = projectGuard(JSON.parse(await readFile(path.join(directory, 'request-002.json'), 'utf8')))
+    assert.equal(blocked.decision, 'BLOCKED')
+    await stop(worker.child)
+    assert.equal((await send('No secret')).status, 422)
+    const failure = projectGuard(JSON.parse(await readFile(path.join(directory, 'request-003.json'), 'utf8')))
+    assert.equal(failure.decision, 'BLOCKED')
+    assert.equal(failure.reason, 'DETECTOR_EXCEPTION')
+    const exported = JSON.stringify({ audit, prompt, read, shell, safe, blocked, failure }) + worker.diagnostics() + guard.diagnostics()
+    for (const value of expectedValues) assert.equal(exported.includes(value), false, 'Synthetic fixture value must not escape safe outputs')
+  } finally {
+    await stop(worker.child)
+    if (guard) await stop(guard.child)
+    await rm(directory, { recursive: true })
+  }
+})
