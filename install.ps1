@@ -57,4 +57,5 @@ Write-Host 'PromptGuard Demo V0 설치 완료' -ForegroundColor Green
 Write-Host "Python: $version"
 Write-Host 'CredSweeper: 1.19.0 (ML OFF)'
 Write-Host "Gitleaks: $gitleaksStatus"
-Write-Host '다음 단계: sample-protected-project로 이동한 뒤 ..\start-promptguard.cmd 실행'
+Write-Host '권장 실행: sample-protected-project로 이동한 뒤 ..\promptguard.cmd run'
+Write-Host '기존 Mod-only 데모: ..\start-promptguard.cmd'

@@ -1,9 +1,18 @@
 {
   "name": "promptguard-claude-demo-v0",
+  "version": "1.0.0",
   "private": true,
+  "bin": {
+    "promptguard": "src/launcher/cli.cjs"
+  },
   "scripts": {
     "start:observability": "node src/observability/server.mjs",
-    "test": "node --test tests/observability/*.test.mjs",
+    "start:runtime": "node src/launcher/cli.cjs run",
+    "status:runtime": "node src/launcher/cli.cjs status",
+    "test": "node --test tests/observability/*.test.mjs tests/mod/test_restore.mjs tests/final-guard/guard.test.cjs",
+    "test:final-guard": "node --test tests/final-guard/guard.test.cjs",
+    "selftest:runtime": "node src/supervisor/selftest.cjs",
+    "check:runtime": "node --check src/guard/final-guard.cjs && node --check src/guard/lib.cjs && node --check src/launcher/cli.cjs && node --check src/supervisor/runtime.cjs",
     "lint": "eslint src/observability src/native-mod/hooks/register.mjs tests/observability scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "build": "node scripts/build.mjs"
