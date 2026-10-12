@@ -397,7 +397,7 @@ describe('production-style Final Guard', { concurrency: 1 }, () => {
       const record = JSON.parse(line)
       assert.ok(Object.keys(record).every(key => allowedKeys.has(key)))
       assert.match(record.request_id, /^[0-9a-f-]{36}$/)
+      assert.equal(record.session_hash, SESSION_HASH)
     }
-    assert.ok(text.includes(`\"session_hash\":\"${SESSION_HASH}\"`))
   })
 })

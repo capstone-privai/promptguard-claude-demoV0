@@ -300,11 +300,10 @@ class FinalGuard {
 
     const requestId = crypto.randomUUID()
     const knownEndpoint = ALLOWED_ENDPOINTS.has(pathname)
+    const incomingSession = sessionHeader(request.headers)
     const context = {
       requestId,
-      sessionHash: sessionHeader(request.headers)
-        ? this.hashSession(sessionHeader(request.headers))
-        : this.config.sessionHash,
+      sessionHash: this.config.sessionHash || (incomingSession ? this.hashSession(incomingSession) : null),
       endpoint: knownEndpoint ? pathname : 'UNKNOWN',
       bodySize: 0,
       findingCount: 0,

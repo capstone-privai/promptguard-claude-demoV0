@@ -249,7 +249,7 @@ class MyAdapter(DetectorAdapter):
 
 ## 중요 제한
 
-`promptguard run`은 실제 provider forwarding Final Guard를 사용합니다. 반면 기존 `start-promptguard.*`는 **Mod-only 체험 모드**이고, `src/guard/server.cjs`는 팀의 검증용 mock endpoint라서 provider-bound fail-closed를 보장하지 않습니다. 실제 credential을 repository나 fixture에 넣지 말고, 포함된 synthetic 프로젝트로 먼저 검증하세요.
+`promptguard run`은 실제 provider forwarding Final Guard를 사용합니다. 반면 기존 `start-promptguard.*`는 **Mod-only 체험 모드**라서 provider-bound fail-closed를 보장하지 않습니다. synthetic mock provider/Guard fixture는 production source가 아닌 `tests/observability/`에만 있습니다. 실제 credential을 repository나 fixture에 넣지 말고, 포함된 synthetic 프로젝트로 먼저 검증하세요.
 
 또한 Claude Code 2.1.291의 `--append-system-prompt`는 Native Mod 훅에 보이지 않아 Mod가 변환할 수 없습니다. 검증 환경에서는 Final Guard가 이를 차단했습니다.
 
@@ -258,7 +258,7 @@ class MyAdapter(DetectorAdapter):
 ```text
 src/native-mod/             Claude Code Native Mod
 src/detector/               detector worker, adapters, consensus + local MCP bridge
-src/guard/                  production Final Guard + legacy validation mock
+src/guard/                  production Final Guard
 src/supervisor/             cross-platform lifecycle/readiness/restart supervisor
 src/launcher/               promptguard CLI
 src/audit/                  raw-free audit writer
@@ -276,12 +276,11 @@ outputs/                    machine-readable validation results
 node src/observability/server.mjs
 ```
 
-브라우저에서 `http://127.0.0.1:18880`을 열면 `.runtime/audit/`의 최신 Mod audit를 읽습니다.
-`PG_MOD_AUDIT`로 특정 audit 파일을 지정할 수 있습니다. UI 실행에는 npm 패키지가 필요하지 않습니다.
+브라우저에서 `http://127.0.0.1:18880`을 열면 Runtime V1의 `.promptguard/audit/mod-audit.json`과 `guard-audit.jsonl`을 읽습니다. 기존 Mod-only `.runtime/audit/` 기록도 fallback으로 지원합니다. `PG_MOD_AUDIT`와 `PG_GUARD_AUDIT`로 특정 파일을 지정할 수 있습니다. UI 실행에는 npm 패키지가 필요하지 않습니다.
 
 - Pipeline, session summary, event timeline, detector/rule/span 상세, Read/tool activity, replacement preview
 - Live 데이터와 완전히 분리된 **DEMO / MOCK** 시나리오 선택
-- 실제 provider-bound 검증이 없으므로 최종 Cloud egress는 항상 **NOT VERIFIED**
+- 선택한 session hash와 연결되는 실제 Final Guard audit이 있으면 최종 SAFE/BLOCKED, finding, latency, upstream status 표시
 - 실제 원문이나 raw tool output을 브라우저로 보내지 않음
 - Turn ID, 파일 경로, 고유 파일 수와 미제공 metadata는 추측하지 않고 unavailable 표시
 

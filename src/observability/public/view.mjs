@@ -43,12 +43,17 @@ export function sortRows(rows, direction = 'newest', key = 'timestamp') {
     return result || a.index - b.index
   }).map(item => item.row)
 }
-export function pipeline(events, demoDecision = null) {
+export function pipeline(events, guard = null) {
   const activities = toolActivities(events)
   const toolStatus = activities.some(e => e.event === 'tool_started') ? 'running' : activities.some(e => e.event === 'tool_denied') ? 'blocked' : activities.some(e => e.failed || e.event === 'tool_failed') ? 'error' : activities.length ? 'success' : 'pending'
   const has = source => events.some(e => e.source === source && !e.failed)
   const stage = (name, status, detail) => ({ name, status, detail })
-  return [stage('사용자 프롬프트', has('USER_PROMPT') ? 'success' : 'pending', '프롬프트 검사 기록'), stage('에이전트 / 도구', toolStatus, '도구 실행 과정'), stage('탐지기', events.some(e => e.failureStage === 'detector') ? 'error' : events.some(e => e.scanned > 0) ? 'success' : 'pending', '로컬 검사 기록'), stage('마스킹', events.some(e => e.failureStage === 'sanitizer') ? 'error' : events.some(e => e.masked > 0) ? 'success' : 'pending', '실제 적용한 치환'), stage('외부 전송 검사', demoDecision === 'SAFE' ? 'success' : demoDecision === 'BLOCKED' ? 'blocked' : 'pending', demoDecision ? '데모 결과' : '미검증 (NOT VERIFIED)'), stage('클라우드 모델', 'pending', '실제 전송 기록 없음')]
+  const guardDecision = typeof guard === 'string' ? guard : guard?.decision
+  const upstreamStatus = typeof guard === 'object' && Number.isInteger(guard?.upstreamStatus) ? guard.upstreamStatus : null
+  const guardDetail = guardDecision ? (guard?.scope?.startsWith('DEMO') ? '데모 결과' : 'Final Guard 감사 기록') : '미검증 (NOT VERIFIED)'
+  const cloudStatus = guardDecision === 'BLOCKED' ? 'blocked' : upstreamStatus !== null ? 'success' : 'pending'
+  const cloudDetail = guardDecision === 'BLOCKED' ? 'Guard에서 전송 차단' : upstreamStatus !== null ? `Upstream 응답 ${upstreamStatus}` : '확인된 upstream 응답 없음'
+  return [stage('사용자 프롬프트', has('USER_PROMPT') ? 'success' : 'pending', '프롬프트 검사 기록'), stage('에이전트 / 도구', toolStatus, '도구 실행 과정'), stage('탐지기', events.some(e => e.failureStage === 'detector') ? 'error' : events.some(e => e.scanned > 0) ? 'success' : 'pending', '로컬 검사 기록'), stage('마스킹', events.some(e => e.failureStage === 'sanitizer') ? 'error' : events.some(e => e.masked > 0) ? 'success' : 'pending', '실제 적용한 치환'), stage('외부 전송 검사', guardDecision === 'SAFE' ? 'success' : guardDecision === 'BLOCKED' ? 'blocked' : 'pending', guardDetail), stage('클라우드 모델', cloudStatus, cloudDetail)]
 }
 
 // Display labels only: audit codes, rule IDs and replacement tokens stay unchanged.
@@ -68,7 +73,7 @@ const labels = {
   MASK: '마스킹 (MASK)', detector: '탐지기 (detector)', sanitizer: '마스킹 처리 (sanitizer)',
   Read: 'Read · 파일 읽기', Grep: 'Grep · 내용 검색', Bash: 'Bash · 셸 실행', Agent: 'Agent · 에이전트',
   'MCP tool': 'MCP 도구', 'Other tool': '기타 도구',
-  'VALIDATION MOCK — not a Cloud provider': '검증용 모의 Guard — 실제 클라우드 모델이 아닙니다',
+  'FINAL GUARD — provider-bound verification': 'Final Guard · Provider 전송 직전 검사',
   'DEMO — synthetic UI scenario': 'DEMO — 가상 화면 시나리오',
   'Synthetic failure scenario': '가상 실패 시나리오',
 }

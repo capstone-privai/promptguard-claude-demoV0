@@ -5,13 +5,14 @@ import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { JSDOM } from 'jsdom'
-import { projectAudit, projectGuard } from '../../src/observability/model.mjs'
+import { projectAudit, projectGuardAudit } from '../../src/observability/model.mjs'
 import { summarize, pipeline, sortRows } from '../../src/observability/public/view.mjs'
 import { demo } from '../../src/observability/public/demo.mjs'
 
 const synthetic = '[SYNTHETIC_INPUT_ONLY]'
 const session = 'a'.repeat(64)
 const row = (extra = {}) => ({ timestamp: '2026-10-11T00:00:00.000Z', session_id_hash: session, source: 'user_prompt', event: 'scan_completed', finding_count: 0, redacted_count: 0, scanned_payload_count: 1, ...extra })
+const guardRow = (extra = {}) => ({ timestamp: '2026-10-11T00:00:01.000Z', session_hash: session, endpoint: '/v1/messages', body_size: 128, finding_count: 0, finding_types: [], decision: 'allow', reason: 'FORWARDED', scan_latency_ms: 1.25, upstream_status: 200, ...extra })
 
 test('empty, prompt, tool, multiple files and missing metadata summaries', () => {
   assert.equal(summarize([]).scanned, null)
@@ -49,12 +50,22 @@ test('timestamp sorting is derived, stable, and leaves undated events at the end
   assert.equal(rows[0].timestamp, '2026-10-11T00:00:02.000Z')
 })
 
-test('SAFE requires normal inspected zero findings; bypass and allow_raw are not verified', () => {
-  const record = { guard_mode: 'normal', guard_inspected: true, raw_marker_count: 0, guard_allowed: true }
-  assert.equal(projectGuard(record).decision, 'SAFE')
-  for (const change of [{ guard_mode: 'bypass' }, { guard_mode: 'allow_raw' }, { guard_inspected: false }, { raw_marker_count: 1 }, { raw_marker_count: undefined }]) assert.equal(projectGuard({ ...record, ...change }).decision, 'NOT VERIFIED')
-  assert.equal(projectGuard({ guard_allowed: false, block_reason: 'DETECTOR_EXCEPTION' }).decision, 'BLOCKED')
-  assert.equal(projectGuard(null), null)
+test('Final Guard audit projects provider-bound SAFE/BLOCKED decisions without raw fields', () => {
+  const [safe, blocked, invalid] = projectGuardAudit([
+    guardRow({ raw_secret: synthetic, authorization: synthetic }),
+    guardRow({ decision: 'block', reason: 'DETECTOR_FINDINGS', finding_count: 2, finding_types: ['PASSWORD', 'TOKEN'], upstream_status: null }),
+    guardRow({ decision: 'allow', finding_count: 1, finding_types: ['NOT_ALLOWED'], endpoint: synthetic, reason: synthetic, session_hash: synthetic }),
+  ])
+  assert.equal(safe.decision, 'SAFE')
+  assert.equal(safe.upstreamStatus, 200)
+  assert.equal(blocked.decision, 'BLOCKED')
+  assert.deepEqual(blocked.findingTypes, ['PASSWORD', 'TOKEN'])
+  assert.equal(invalid.decision, 'NOT VERIFIED')
+  assert.equal(invalid.endpoint, 'UNKNOWN')
+  assert.equal(invalid.reason, null)
+  assert.equal(invalid.session, 'unavailable')
+  assert.equal(JSON.stringify([safe, blocked, invalid]).includes(synthetic), false)
+  assert.throws(() => projectGuardAudit(null), /GUARD_AUDIT_UNAVAILABLE/)
 })
 
 test('DTO removes payloads, errors, keys, hashes, paths and arbitrary tool identifiers', () => {
@@ -141,7 +152,8 @@ test('actual app renders safe DOM, supports demo selection, and never logs paylo
     globalThis.document = dom.window.document
     globalThis.setInterval = () => 0
     const events = projectAudit([row({ raw_secret: synthetic, full_raw_prompt: synthetic, findings: [{ secret_type: 'PASSWORD', rule_id: 'Password', detector: 'CredSweeper', action: 'MASK', placeholder: '[PASSWORD_1]' }] })])
-    globalThis.fetch = async () => ({ ok: true, json: async () => ({ mode: 'LIVE', events }) })
+    const guards = projectGuardAudit([guardRow()])
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ mode: 'LIVE', events, guards }) })
     for (const method of methods) console[method] = (...args) => logs.push(args)
     await import(`../../src/observability/public/app.mjs?test=${Math.random()}`)
     const text = dom.window.document.body.textContent
@@ -150,7 +162,8 @@ test('actual app renders safe DOM, supports demo selection, and never logs paylo
     assert.equal(text.includes('null'), false)
     assert.equal(dom.window.localStorage.length, 0)
     assert.equal(dom.window.sessionStorage.length, 0)
-    assert.ok(text.includes('NOT VERIFIED'))
+    assert.ok(text.includes('Final Guard'))
+    assert.ok(text.includes('200'))
     const mode = dom.window.document.getElementById('mode')
     mode.value = 'DEMO'; mode.dispatchEvent(new dom.window.Event('change'))
     assert.ok(dom.window.document.getElementById('notice').textContent.includes('DEMO / MOCK'))
@@ -198,20 +211,32 @@ test('actual app renders safe DOM, supports demo selection, and never logs paylo
 test('HTTP endpoint enforces localhost Host, hides raw audit and handles malformed files', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'pg-observe-test-'))
   const file = path.join(directory, 'audit.json')
+  const guardFile = path.join(directory, 'guard-audit.jsonl')
   const old = process.env.PG_MOD_AUDIT
+  const oldGuard = process.env.PG_GUARD_AUDIT
   process.env.PG_MOD_AUDIT = file
+  process.env.PG_GUARD_AUDIT = guardFile
   const { createServer } = await import(`../../src/observability/server.mjs?test=${Math.random()}`)
   const server = createServer()
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const url = `http://127.0.0.1:${server.address().port}`
   try {
     await writeFile(file, JSON.stringify([row({ raw_secret: synthetic })]))
+    await writeFile(guardFile, `${JSON.stringify(guardRow({ raw_secret: synthetic }))}\n`)
     const response = await fetch(`${url}/api/events`)
     assert.equal(response.status, 200)
-    assert.equal((await response.text()).includes(synthetic), false)
+    const responseText = await response.text()
+    assert.equal(responseText.includes(synthetic), false)
+    const responseValue = JSON.parse(responseText)
+    assert.equal(responseValue.guards[0].decision, 'SAFE')
+    assert.equal(responseValue.guards[0].upstreamStatus, 200)
     assert.equal((await fetch(`${url}/api/events`, { headers: { origin: 'https://example.com' } })).status, 403)
     assert.equal(await new Promise(resolve => http.get(`${url}/api/events`, { headers: { host: 'example.com' } }, response => { response.resume(); resolve(response.statusCode) })), 403)
     assert.equal((await fetch(`${url}/api/events`, { method: 'POST' })).status, 403)
+    await writeFile(guardFile, `${synthetic}\n`)
+    const missingGuard = await fetch(`${url}/api/events`)
+    assert.equal(missingGuard.status, 200)
+    assert.equal((await missingGuard.json()).guardUnavailable, true)
     await writeFile(file, synthetic)
     const failed = await fetch(`${url}/api/events`)
     assert.equal(failed.status, 503)
@@ -219,6 +244,7 @@ test('HTTP endpoint enforces localhost Host, hides raw audit and handles malform
   } finally {
     await new Promise(resolve => server.close(resolve))
     if (old === undefined) delete process.env.PG_MOD_AUDIT; else process.env.PG_MOD_AUDIT = old
+    if (oldGuard === undefined) delete process.env.PG_GUARD_AUDIT; else process.env.PG_GUARD_AUDIT = oldGuard
     await rm(directory, { recursive: true })
   }
 })
