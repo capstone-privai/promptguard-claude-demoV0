@@ -95,10 +95,31 @@ function redactText(text, findings) {
   return out
 }
 
+// The pgdetector MCP server connects in the background after the session starts, and until then
+// $.mcp.call throws. A throwing hook is skipped by the engine, so the first hooks would pass raw
+// text. Wait for the first connection (bounded); after that, a throw fails at once as before.
+const CONNECT_RETRY_MS = 250
+let detectorConnected = false
+
+async function callDetector($, entries) {
+  const wait = Number(await $.env.get('PG_MOD_CONNECT_WAIT_MS') ?? 15000)
+  const deadline = Date.now() + (Number.isFinite(wait) && wait >= 0 ? wait : 15000)
+  for (;;) {
+    try {
+      const response = await $.mcp.call('pgdetector', 'scan_batch', { items: entries })
+      detectorConnected = true
+      return response
+    } catch (error) {
+      if (detectorConnected || Date.now() >= deadline) throw error
+      await new Promise(resolve => setTimeout(resolve, CONNECT_RETRY_MS))
+    }
+  }
+}
+
 async function scanBatch($, entries) {
   if (!entries.length) return { items: [], latencyMs: 0 }
   const started = Date.now()
-  const operation = detectorQueue.then(() => $.mcp.call('pgdetector', 'scan_batch', { items: entries }))
+  const operation = detectorQueue.then(() => callDetector($, entries))
   detectorQueue = operation.catch(() => {})
   const response = await operation
   if (!response || response.isError === true || !Array.isArray(response.content)) throw new Error('PromptGuard detector bridge failure')

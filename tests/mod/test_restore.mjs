@@ -158,10 +158,39 @@ test('rows already sanitized by other hooks are not rescanned', async () => {
 })
 
 test('a detector failure on a shell-mode row fails closed without storing it', async () => {
-  const { hooks, $ } = await load()
+  const { hooks, $ } = await load({ PG_MOD_CONNECT_WAIT_MS: '0' })
   $.mcp.call = async () => { throw new Error('down') }
   let stored = false
   await assert.rejects(hooks['session.append']($, { door: 'command', origin: { kind: 'unclassified' }, uuid: 'u2', message: { type: 'user', role: 'user', content: [{ type: 'text', text: `DB_PASSWORD=${PASSWORD}` }] } }, () => { stored = true; return {} }), /PromptGuard detector failure/)
   assert.equal(stored, false)
 })
 
+// The engine connects the pgdetector MCP server after the session starts; early hooks must wait, not be skipped.
+const notConnected = () => new Error('$.mcp.call: no connected MCP tool "scan_batch" on a server named "pgdetector"')
+
+test('hooks that run before the detector connects wait for it instead of failing', async () => {
+  const { hooks, $ } = await load()
+  const call = $.mcp.call
+  let attempts = 0
+  $.mcp.call = async (...args) => { if (++attempts < 3) throw notConnected(); return call(...args) }
+  const stored = await append(hooks, $, 'command', [{ type: 'text', text: `<bash-stdout>DB_PASSWORD=${PASSWORD}</bash-stdout>` }])
+  assert.equal(attempts, 3)
+  assert.equal(stored.message.content[0].text, '<bash-stdout>DB_PASSWORD=[PASSWORD_1]</bash-stdout>')
+})
+
+test('a detector that never connects fails closed after the bounded wait', async () => {
+  const { hooks, $ } = await load({ PG_MOD_CONNECT_WAIT_MS: '300' })
+  $.mcp.call = async () => { throw notConnected() }
+  const started = Date.now()
+  await assert.rejects(maskPrompt(hooks, $, `DB_PASSWORD=${PASSWORD}`), /PromptGuard detector failure/)
+  assert.ok(Date.now() - started >= 250)
+})
+
+test('once connected, a later detector failure fails at once without waiting', async () => {
+  const { hooks, $ } = await load()
+  await maskPrompt(hooks, $, 'hello')
+  $.mcp.call = async () => { throw new Error('down') }
+  const started = Date.now()
+  await assert.rejects(maskPrompt(hooks, $, `DB_PASSWORD=${PASSWORD}`), /PromptGuard detector failure/)
+  assert.ok(Date.now() - started < 1000)
+})

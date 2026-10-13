@@ -81,7 +81,7 @@ async function hookHarness(failure = null) {
   mod.register((name, handler) => callbacks.set(name, handler))
   let output = []
   const $ = {
-    env: { get: async key => ({ PG_MOD_AUDIT: 'memory-only', PG_SESSION_HASH: session }[key]) },
+    env: { get: async key => ({ PG_MOD_AUDIT: 'memory-only', PG_SESSION_HASH: session, PG_MOD_CONNECT_WAIT_MS: '0' }[key]) },
     fs: { write: async (_file, value) => { output = JSON.parse(value) } },
     mcp: { call: async (_server, _tool, { items }) => {
       if (failure === 'detector') throw new Error(synthetic)
