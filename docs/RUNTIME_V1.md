@@ -25,9 +25,11 @@ configured Anthropic upstream
 
 - loopback에만 bind합니다.
 - `POST /v1/messages`와 `POST /v1/messages/count_tokens`만 허용합니다.
-- `application/json`의 모든 문자열 leaf를 검사합니다.
+- `application/json`의 모든 문자열 leaf를 검사합니다. 같은 문자열은 요청마다 한 번만 검사합니다.
+- detector가 이미 깨끗하다고 판정한 문자열은 Guard process 메모리에 기억하고 다시 검사하지 않습니다. 원문이 아니라 process마다 새로 만든 key의 HMAC만 보관하며(최대 100,000개), finding이 나온 문자열은 캐시하지 않아 매 요청 다시 검사되고 차단됩니다. 매 turn 반복되는 system prompt와 tool 정의는 첫 요청에서만 검사되므로, 이후 요청은 새로 추가된 대화만 검사합니다.
+- 캐시되지 않은 문자열은 256개 단위 batch로 detector에 보내며 batch마다 timeout을 따로 적용합니다. 이미 끝난 batch의 결과는 캐시에 남으므로 첫 요청이 timeout되더라도 client 재시도 때 이어서 검사합니다. finding이 나온 batch에서 검사를 멈추고 차단합니다.
 - detector finding, timeout, 연결 실패, HTTP 오류, malformed/불일치 응답을 모두 차단합니다.
-- body 크기, 수신 시간, 문자열 leaf 수를 제한합니다.
+- body 크기, 수신 시간, 문자열 leaf 수(요청당 65,536개)를 제한합니다.
 - 검사를 통과한 원본 byte만 설정된 upstream으로 전달하고 response는 streaming passthrough합니다.
 - authorization 등 provider 인증 header는 전달하지만 Guard/detector process 환경이나 audit에는 복사하지 않습니다.
 
@@ -43,7 +45,11 @@ configured Anthropic upstream
 
 PowerShell에서는 같은 명령을 `promptguard.cmd`로 실행합니다. `run`은 foreground supervisor이므로 종료하려면 해당 터미널에서 `Ctrl+C`를 누릅니다.
 
-기본 설정은 `promptguard.config.json`입니다. 다른 설정은 `--config FILE`, runtime metadata 위치는 `--runtime-dir DIR`로 지정합니다. 주요 환경 변수 override는 `PG_UPSTREAM_BASE_URL`, `PG_PYTHON`, `PG_CLAUDE_BINARY`, `PG_GUARD_PORT`, `PG_MOD_DETECTOR_PORT`, `PG_GUARD_DETECTOR_PORT`, `PG_DETECTOR_TIMEOUT_MS`, `PG_MAX_BODY_BYTES`, `PG_AUDIT_PATH`입니다.
+기본 설정은 `promptguard.config.json`입니다. 다른 설정은 `--config FILE`, runtime metadata 위치는 `--runtime-dir DIR`로 지정합니다. 주요 환경 변수 override는 `PG_UPSTREAM_BASE_URL`, `PG_PYTHON`, `PG_CLAUDE_BINARY`, `PG_GUARD_PORT`, `PG_MOD_DETECTOR_PORT`, `PG_GUARD_DETECTOR_PORT`, `PG_DETECTOR_TIMEOUT_MS`(Guard는 batch당 적용), `PG_MAX_BODY_BYTES`, `PG_AUDIT_PATH`, `PG_MOD_CONNECT_WAIT_MS`입니다.
+
+Native Mod의 detector MCP 서버는 세션 시작 후 background로 연결되므로, Mod는 첫 연결까지만 detector 호출을 재시도합니다(`PG_MOD_CONNECT_WAIT_MS`, 기본 15초). 예외를 던진 훅은 Claude Code가 건너뛰기 때문에, 기다리지 않으면 세션 시작 직후의 CLAUDE.md 등이 마스킹 없이 Guard까지 가게 됩니다. 한 번 연결된 뒤의 detector 실패는 기다리지 않고 바로 실패합니다.
+
+Supervisor는 Python 3.12와 3.14 detector worker를 모두 받습니다.
 
 ## Audit와 상태 데이터
 

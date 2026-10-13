@@ -44,6 +44,8 @@ chmod +x install.sh
 ./install.sh
 ```
 
+`promptguard run`은 Python 3.14로 만든 `.venv`도 사용할 수 있습니다. 설치 스크립트는 여전히 3.12를 찾습니다.
+
 Python 3.12나 Node.js가 없다면 Homebrew를 사용하는 환경에서는 `brew install python@3.12 node`로 설치할 수 있습니다. 별도 Python 경로를 사용하려면 `PROMPTGUARD_PYTHON=/path/to/python3.12 ./install.sh`처럼 지정합니다. 설치 스크립트가 `promptguard`와 기존 launcher에 실행 권한을 설정합니다.
 
 ## 2. 권장 실행: Runtime V1 + Final Guard
@@ -113,6 +115,10 @@ DB 연결이 실패하는 원인을 찾아줘.
 - `demo-db.internal`, `orders`, `5440`, expected `5432`, `E_PORT_MISMATCH`는 보존
 - Claude가 port mismatch를 원인으로 진단
 - raw-free audit은 `.runtime/audit/`에 생성
+
+## `!` 셸 모드 입력 마스킹
+
+Claude Code에서 `!`로 직접 실행한 명령과 그 출력은 `prompt.submit`·`tool.call` 훅을 거치지 않고 `session.append`(door `command`)로만 세션에 들어갑니다. Mod는 `session.append`에서 다른 훅이 다루지 않는 행(`command`, `tool-message`, `delivery`, `hook-context`, `note`, `notice`)의 text와 tool_result text를 저장·전송 전에 마스킹합니다. 따라서 `!cat .env`의 값은 모델 요청과 로컬 transcript(`.jsonl`) 모두에 placeholder로만 남습니다. 화면에는 rewrite 직전 형태가 잠깐 보일 수 있습니다.
 
 ## Placeholder 원복 (실행 직전 복원)
 
