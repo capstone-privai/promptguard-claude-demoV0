@@ -167,6 +167,16 @@ async function detectorStatus() {
   return (await jsonRequest(detector.port, '/__status')).json
 }
 
+// Text the Guard has not seen yet, so it cannot be answered from the clean-scan cache.
+function freshBody(...contents) {
+  const nonce = crypto.randomUUID()
+  return Buffer.from(JSON.stringify({
+    model: 'claude-test',
+    max_tokens: 32,
+    messages: contents.map(content => ({ role: 'user', content: `${content} ${nonce}` })),
+  }), 'utf8')
+}
+
 function providerRequest(body = SAFE_BODY, extra = {}) {
   return request(guard.port, extra.pathname || '/v1/messages', {
     method: extra.method || 'POST',
@@ -303,14 +313,14 @@ describe('production-style Final Guard', { concurrency: 1 }, () => {
     ]) {
       await resetUpstream()
       await setDetector(mode, 0)
-      const result = await providerRequest()
+      const result = await providerRequest(freshBody(mode, `${mode} second`))
       assert.equal(result.statusCode, 503, mode)
       assert.equal(JSON.parse(result.body).error.code, expected, mode)
       assert.equal((await upstreamStatus()).request_count, 0, mode)
     }
 
     await setDetector('normal', 0)
-    const recovered = await providerRequest()
+    const recovered = await providerRequest(freshBody('recovered'))
     assert.equal(recovered.statusCode, 200)
   })
 
@@ -332,14 +342,55 @@ describe('production-style Final Guard', { concurrency: 1 }, () => {
     }
   })
 
-  test('each retry is rescanned and provider statuses are propagated', async () => {
+  test('an identical retry reuses clean results and provider statuses are propagated', async () => {
+    const body = freshBody('retry')
     const beforeScans = (await detectorStatus()).scan_count
-    const first = await providerRequest(SAFE_BODY, { headers: { 'x-pg-mock-scenario': 'retry-429' } })
-    const second = await providerRequest(SAFE_BODY, { headers: { 'x-pg-mock-scenario': 'retry-429' } })
+    const first = await providerRequest(body, { headers: { 'x-pg-mock-scenario': 'retry-429' } })
+    const second = await providerRequest(body, { headers: { 'x-pg-mock-scenario': 'retry-429' } })
     assert.equal(first.statusCode, 429)
     assert.equal(second.statusCode, 200)
     assert.equal((await upstreamStatus()).request_count, 2)
-    assert.equal((await detectorStatus()).scan_count - beforeScans, 2)
+    assert.equal((await detectorStatus()).scan_count - beforeScans, 1)
+  })
+
+  test('only text not already known clean is scanned, once per distinct value', async () => {
+    const history = freshBody('turn one')
+    assert.equal((await providerRequest(history)).statusCode, 200)
+    const next = JSON.parse(history.toString('utf8'))
+    next.messages.push({ role: 'assistant', content: 'reply' }, { role: 'user', content: `turn two ${crypto.randomUUID()}` })
+    next.messages.push({ role: 'user', content: next.messages.at(-1).content })
+    const before = await detectorStatus()
+    assert.equal((await providerRequest(Buffer.from(JSON.stringify(next), 'utf8'))).statusCode, 200)
+    const after = await detectorStatus()
+    assert.equal(after.scan_count - before.scan_count, 1)
+    // 'assistant' and 'reply' are new; the duplicated new turn is sent once.
+    assert.equal(after.item_count - before.item_count, 3)
+  })
+
+  test('flagged text is never cached and is blocked on every request', async () => {
+    const body = freshBody(`token=${MARKER}`)
+    const before = (await detectorStatus()).scan_count
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await providerRequest(body)
+      assert.equal(result.statusCode, 422)
+      assert.equal(JSON.parse(result.body).error.code, 'DETECTOR_FINDINGS')
+    }
+    assert.equal((await detectorStatus()).scan_count - before, 2)
+    assert.equal((await upstreamStatus()).request_count, 0)
+  })
+
+  test('requests above the worker batch limit are scanned in bounded batches', async () => {
+    // Over the previous 4096-leaf cap and the worker's batch limit, within the 64 KiB test body cap.
+    const nonce = crypto.randomUUID().slice(0, 4)
+    const strings = Array.from({ length: 4200 }, (_, index) => `${nonce}${index}`)
+    const body = Buffer.from(JSON.stringify({ model: 'claude-test', max_tokens: 32, metadata: { strings } }), 'utf8')
+    const before = await detectorStatus()
+    const result = await providerRequest(body)
+    assert.equal(result.statusCode, 200)
+    const after = await detectorStatus()
+    assert.ok(after.max_batch_items <= 256)
+    assert.ok(after.item_count - before.item_count >= 4200)
+    assert.equal((await upstreamStatus()).request_count, 1)
   })
 
   test('SSE text, tool, malformed, error, and early-close responses pass through without buffering or rewrite', async () => {

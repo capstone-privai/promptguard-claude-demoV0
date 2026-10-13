@@ -7,6 +7,7 @@ const { TextDecoder } = require('node:util')
 
 const { AuditWriter, createSessionHasher } = require('../audit/writer.cjs')
 const {
+  CleanScanCache,
   DetectorClient,
   GuardError,
   collectStringLeaves,
@@ -15,6 +16,7 @@ const {
   loadConfig,
   providerUrl,
   requestModule,
+  scanLeaves,
 } = require('./lib.cjs')
 
 const SERVICE = 'promptguard-final-guard'
@@ -180,6 +182,7 @@ class FinalGuard {
     this.config = config
     this.audit = new AuditWriter(config.auditPath)
     this.detector = new DetectorClient(config.detectorBaseUrl, config.detectorTimeoutMs)
+    this.scanCache = new CleanScanCache()
     this.hashSession = createSessionHasher()
     this.startedAt = Date.now()
     this.shuttingDown = false
@@ -339,7 +342,7 @@ class FinalGuard {
       const scanStarted = process.hrtime.bigint()
       let scan
       try {
-        scan = await this.detector.scan(items, context.requestId)
+        scan = await scanLeaves(this.detector, this.scanCache, items, context.requestId)
       } finally {
         context.scanLatencyMs = Number(process.hrtime.bigint() - scanStarted) / 1_000_000
       }

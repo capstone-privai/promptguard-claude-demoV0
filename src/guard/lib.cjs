@@ -9,7 +9,12 @@ const DEFAULT_MAX_BODY = 8 * 1024 * 1024
 const DEFAULT_DETECTOR_TIMEOUT = 5_000
 const DEFAULT_UPSTREAM_TIMEOUT = 120_000
 const DEFAULT_BODY_TIMEOUT = 15_000
-const MAX_STRING_LEAVES = 4096
+// Bounds the JSON walk only; the detector sees at most DETECTOR_BATCH_SIZE uncached leaves per call.
+const MAX_STRING_LEAVES = 65_536
+// Each batch has its own detector timeout, so a cold request that needs many batches can finish,
+// and the batches that did finish stay cached for the client's retry. Well under the worker's 4096.
+const DETECTOR_BATCH_SIZE = 256
+const SCAN_CACHE_LIMIT = 100_000
 const DETECTOR_RESPONSE_LIMIT = 8 * 1024 * 1024
 const SAFE_FINDING_TYPE = /^[A-Z][A-Z0-9_]{0,63}$/
 
@@ -299,8 +304,74 @@ class DetectorClient {
     return {
       findingCount,
       findingTypes: [...findingTypes].sort(),
+      findingCounts: new Map(response.items.map(result => [result.id, result.findings.length])),
       latencyMs: Number(elapsedNs) / 1_000_000,
     }
+  }
+}
+
+// Remembers leaves the detector already found clean. The detector scans every leaf on its own and
+// deterministically, so a clean verdict for the same text is exact. Keys are HMACs under a
+// per-process key: no text, and no hash comparable across processes, is kept. Leaves with a
+// finding are never cached, so they are rescanned and blocked on every request.
+class CleanScanCache {
+  constructor(limit = SCAN_CACHE_LIMIT) {
+    this.key = crypto.randomBytes(32)
+    this.limit = limit
+    this.entries = new Set()
+  }
+
+  digest(text) {
+    return crypto.createHmac('sha256', this.key).update(text, 'utf8').digest('base64')
+  }
+
+  has(digest) {
+    if (!this.entries.has(digest)) return false
+    this.entries.delete(digest)
+    this.entries.add(digest)
+    return true
+  }
+
+  add(digest) {
+    this.entries.delete(digest)
+    this.entries.add(digest)
+    if (this.entries.size > this.limit) this.entries.delete(this.entries.values().next().value)
+  }
+}
+
+// Scans only the distinct leaves not already known clean, in bounded batches. Stops at the first
+// batch with a finding: the request is blocked either way, so later batches would only add delay.
+async function scanLeaves(detector, cache, leaves, requestId) {
+  const pending = new Map()
+  for (const leaf of leaves) {
+    const digest = cache.digest(leaf.text)
+    if (pending.has(digest)) pending.get(digest).occurrences += 1
+    else if (!cache.has(digest)) pending.set(digest, { text: leaf.text, occurrences: 1 })
+  }
+
+  const unique = [...pending]
+  const findingTypes = new Set()
+  let findingCount = 0
+  let latencyMs = 0
+  for (let start = 0; start < unique.length && findingCount === 0; start += DETECTOR_BATCH_SIZE) {
+    const batch = unique.slice(start, start + DETECTOR_BATCH_SIZE)
+    const items = batch.map(([, entry], id) => ({ id, text: entry.text, source: 'outbound' }))
+    const result = await detector.scan(items, `${requestId}.${start / DETECTOR_BATCH_SIZE}`)
+    latencyMs += result.latencyMs
+    for (const type of result.findingTypes) findingTypes.add(type)
+    batch.forEach(([digest, entry], id) => {
+      const count = result.findingCounts.get(id)
+      if (count === 0) cache.add(digest)
+      else findingCount += count * entry.occurrences
+    })
+  }
+
+  return {
+    findingCount,
+    findingTypes: [...findingTypes].sort(),
+    scannedCount: unique.length,
+    cachedCount: leaves.length - unique.reduce((total, [, entry]) => total + entry.occurrences, 0),
+    latencyMs,
   }
 }
 
@@ -345,6 +416,8 @@ function providerUrl(baseUrl, requestUrl) {
 }
 
 module.exports = {
+  CleanScanCache,
+  DETECTOR_BATCH_SIZE,
   DetectorClient,
   GuardError,
   HOP_BY_HOP_HEADERS,
@@ -354,4 +427,5 @@ module.exports = {
   loadConfig,
   providerUrl,
   requestModule,
+  scanLeaves,
 }

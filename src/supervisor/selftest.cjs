@@ -5,7 +5,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const { loadConfig, validateAndResolve } = require('./config.cjs')
-const { parseClaudeVersion, safeServiceEnvironment } = require('./runtime.cjs')
+const { RuntimeSupervisor, parseClaudeVersion, safeServiceEnvironment } = require('./runtime.cjs')
 const { sanitizeGuardStatus } = require('./state.cjs')
 
 const root = path.resolve(__dirname, '..', '..')
@@ -23,6 +23,15 @@ const environment = safeServiceEnvironment({ PG_TEST_VALUE: 'safe' })
 assert.equal(environment.ANTHROPIC_API_KEY, undefined)
 assert.equal(environment.CLAUDE_CODE_OAUTH_TOKEN, undefined)
 assert.equal(environment.PG_TEST_VALUE, 'safe')
+
+// Observability only correlates 64-hex session hashes, matching the legacy launchers.
+const selftestRuntimeDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'promptguard-selftest-'))
+try {
+  const supervisor = new RuntimeSupervisor(config, { command: 'python', prefix: [] }, { noClaude: true, runtimeDirectory: selftestRuntimeDirectory })
+  assert.match(supervisor.sessionHash, /^[a-f0-9]{64}$/)
+} finally {
+  fs.rmSync(selftestRuntimeDirectory, { recursive: true, force: true })
+}
 
 const sanitized = sanitizeGuardStatus({
   ok: true,

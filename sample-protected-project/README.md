@@ -1,6 +1,12 @@
 # Protected Project Sandbox
 
-PromptGuard Native Mod를 직접 시험하기 위한 독립 프로젝트입니다.
+PromptGuard Native Mod와 Final Guard를 직접 시험하기 위한 독립 프로젝트입니다.
+
+이 폴더에서 `claude`를 직접 실행하면 보호가 적용되지 않습니다. 반드시 launcher로 실행합니다.
+
+```bash
+../promptguard run          # Windows: ..\promptguard.cmd run
+```
 
 모든 credential은 비기능 synthetic 값이며 실제 서비스에서 사용할 수 없습니다.
 
@@ -11,5 +17,6 @@ PromptGuard Native Mod를 직접 시험하기 위한 독립 프로젝트입니�
 기대 결과:
 
 - password, API key, token은 placeholder로만 전달
+- `!cat .env`처럼 직접 실행한 명령의 출력도 placeholder로만 전달
 - host, port, database, service, region, error code는 보존
 - configured port 5440과 expected port 5432의 불일치를 원인으로 진단

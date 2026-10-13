@@ -1,4 +1,4 @@
 {
-  "description": "Uses the local detector ensemble to sanitize prompts, context, tools, subagents, history, and compaction while preserving structure",
+  "description": "Uses the local detector ensemble to sanitize prompts, context, tools, shell-mode (!) rows, subagents, history, and compaction while preserving structure",
   "modules": ["./register.mjs"]
 }

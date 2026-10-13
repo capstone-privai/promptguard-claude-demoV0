@@ -14,6 +14,8 @@ const state = {
   delayMs: Number(process.env.PG_MOCK_DETECTOR_DELAY_MS || 0),
   healthCount: 0,
   scanCount: 0,
+  itemCount: 0,
+  maxBatchItems: 0,
   activeScans: 0,
   maxActiveScans: 0,
 }
@@ -78,6 +80,10 @@ async function handleScan(request, response) {
     return
   }
 
+  if (Array.isArray(payload?.items)) {
+    state.itemCount += payload.items.length
+    state.maxBatchItems = Math.max(state.maxBatchItems, payload.items.length)
+  }
   if (state.delayMs > 0 || state.mode === 'timeout') {
     const delay = state.mode === 'timeout' ? 30_000 : state.delayMs
     await new Promise(resolve => setTimeout(resolve, delay))
@@ -160,6 +166,8 @@ const server = http.createServer(async (request, response) => {
       delay_ms: state.delayMs,
       health_count: state.healthCount,
       scan_count: state.scanCount,
+      item_count: state.itemCount,
+      max_batch_items: state.maxBatchItems,
       active_scans: state.activeScans,
       max_active_scans: state.maxActiveScans,
     })

@@ -1,7 +1,7 @@
 // The only projection from local audit files into browser state. Never spread input objects.
 const types = new Set(['PASSWORD', 'API_KEY', 'TOKEN', 'PRIVATE_KEY', 'AWS_KEY', 'GITHUB_TOKEN', 'SLACK_TOKEN', 'JWT', 'SECRET', 'CREDENTIAL'])
-const sources = { user_prompt: 'USER_PROMPT', read_result: 'FILE_READ', grep: 'TOOL_OUTPUT', bash_error: 'TOOL_OUTPUT', bash_stdout: 'TOOL_OUTPUT', mcp: 'TOOL_OUTPUT', tool_result: 'TOOL_OUTPUT', history: 'HISTORY', claude_md: 'AGENTS_CONTEXT', outbound: 'FINAL_REQUEST' }
-const hooks = new Set(['prompt.submit', 'prompt.context', 'prompt.section', 'prompt.compose', 'prompt.attachment', 'skill.prompt', 'agent.spawn', 'tool.call', 'tool.call.text', 'tool.call.context', 'session.compact', 'turn.step', 'turn.step.agent-input'])
+const sources = { user_prompt: 'USER_PROMPT', user_command: 'USER_PROMPT', read_result: 'FILE_READ', grep: 'TOOL_OUTPUT', bash_error: 'TOOL_OUTPUT', bash_stdout: 'TOOL_OUTPUT', mcp: 'TOOL_OUTPUT', tool_result: 'TOOL_OUTPUT', history: 'HISTORY', claude_md: 'AGENTS_CONTEXT', outbound: 'FINAL_REQUEST' }
+const hooks = new Set(['prompt.submit', 'prompt.context', 'prompt.section', 'prompt.compose', 'prompt.attachment', 'skill.prompt', 'agent.spawn', 'tool.call', 'tool.call.text', 'tool.call.context', 'session.compact', 'session.append', 'turn.step', 'turn.step.agent-input'])
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null
 const timestamp = value => typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value)) ? value : null
 const rule = value => typeof value === 'string' && /^[A-Za-z][A-Za-z ()+_.-]{0,119}$/.test(value) ? value : null
