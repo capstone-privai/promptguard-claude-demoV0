@@ -1,7 +1,9 @@
 const http = require('http')
+const crypto = require('crypto')
 const readline = require('readline')
 
-const detectorUrl = new URL(process.env.PG_DETECTOR_URL || 'http://127.0.0.1:18771')
+const detectorUrl = new URL(process.env.PG_MOD_DETECTOR_URL || process.env.PG_DETECTOR_URL || 'http://127.0.0.1:18771')
+const detectorTimeoutMs = Number(process.env.PG_DETECTOR_TIMEOUT_MS || 5000)
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })
 
 function send(value) {
@@ -10,14 +12,14 @@ function send(value) {
 
 function scanBatch(items) {
   return new Promise((resolve, reject) => {
-    const body = Buffer.from(JSON.stringify({ items }), 'utf8')
+    const body = Buffer.from(JSON.stringify({ request_id: crypto.randomUUID(), items }), 'utf8')
     const request = http.request({
       hostname: detectorUrl.hostname,
       port: detectorUrl.port,
       path: '/scan-batch',
       method: 'POST',
       headers: { 'content-type': 'application/json', 'content-length': body.length },
-      timeout: 5000,
+      timeout: detectorTimeoutMs,
     }, response => {
       const chunks = []
       response.on('data', chunk => chunks.push(chunk))

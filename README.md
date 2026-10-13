@@ -40,13 +40,48 @@ cd promptguard-claude-demoV0
 ```bash
 git clone https://github.com/capstone-privai/promptguard-claude-demoV0.git
 cd promptguard-claude-demoV0
-chmod +x install.sh start-promptguard.sh
+chmod +x install.sh
 ./install.sh
 ```
 
-Python 3.12나 Node.js가 없다면 Homebrew를 사용하는 환경에서는 `brew install python@3.12 node`로 설치할 수 있습니다. 별도 Python 경로를 사용하려면 `PROMPTGUARD_PYTHON=/path/to/python3.12 ./install.sh`처럼 지정합니다.
+Python 3.12나 Node.js가 없다면 Homebrew를 사용하는 환경에서는 `brew install python@3.12 node`로 설치할 수 있습니다. 별도 Python 경로를 사용하려면 `PROMPTGUARD_PYTHON=/path/to/python3.12 ./install.sh`처럼 지정합니다. 설치 스크립트가 `promptguard`와 기존 launcher에 실행 권한을 설정합니다.
 
-## 2. synthetic 보호 프로젝트에서 실행
+## 2. 권장 실행: Runtime V1 + Final Guard
+
+Runtime V1은 아래 순서로 보호 서비스를 준비한 뒤에만 Claude Code를 실행합니다.
+
+1. Native Mod 변환용 detector worker
+2. Final Guard 검증용 독립 detector worker
+3. loopback Final Transmission Guard
+4. `ANTHROPIC_BASE_URL`이 Guard로 고정된 Claude Code
+
+Windows:
+
+```powershell
+cd sample-protected-project
+..\promptguard.cmd run
+```
+
+macOS:
+
+```bash
+cd sample-protected-project
+../promptguard run
+```
+
+Claude 인수를 넘길 때는 `--` 뒤에 적습니다. 예: `../promptguard run -- --resume`. Claude 로그인 없이 서비스만 검증하려면 `--no-claude`를 사용하고, 다른 터미널에서 `../promptguard status` 또는 `..\promptguard.cmd status`로 raw-free 상태와 차단 counter를 확인할 수 있습니다.
+
+기본 설정은 repository의 `promptguard.config.json`이며 `--config FILE`로 바꿀 수 있습니다. strict schema이므로 오타나 알 수 없는 필드는 시작 전에 거부합니다. Claude Code 버전은 기본적으로 `2.1.291`과 정확히 일치해야 합니다.
+
+Final Guard는 실제 Anthropic upstream으로 전달되는 `/v1/messages`와 `/v1/messages/count_tokens` JSON의 모든 문자열 leaf를 다시 검사합니다. finding뿐 아니라 detector timeout, crash, malformed response, body 제한 위반과 알 수 없는 endpoint도 provider 전송 전에 차단합니다. 요청 원문, credential, authorization header는 audit에 남기지 않습니다.
+
+> 두 worker는 process와 lifecycle이 독립적이지만 같은 최신 detector ensemble 설정을 사용합니다. 따라서 Mod 장애, 변환 뒤 재노출, worker 하나의 장애를 최종 전송 지점에서 막는 의미가 있습니다. 반면 모든 adapter가 공통으로 놓치는 패턴은 Guard도 놓칠 수 있으므로, detector 다양성과 coverage 검증은 별도 과제입니다.
+
+[Runtime V1 구조·보안 경계·운영 설명](docs/RUNTIME_V1.md)
+
+## 3. 기존 Mod-only 체험 경로
+
+아래 `start-promptguard.*` launcher는 팀의 기존 데모 및 회귀 테스트 호환을 위해 유지합니다. Native Mod 동작을 빠르게 볼 수 있지만 provider-bound Final Guard는 포함하지 않습니다. 실제 보호 흐름을 확인하려면 위 Runtime V1을 사용하세요.
 
 Windows:
 
@@ -107,7 +142,7 @@ node tests/e2e/restore_history.mjs       # E2E (설치 후, Claude Code와 .venv
 
 E2E 증거(기록된 provider 요청, audit)는 `.runtime/e2e-restore/`에 남습니다.
 
-## 3. 다른 프로젝트에서 실행
+## 4. 다른 프로젝트에서 실행
 
 Windows:
 
@@ -115,17 +150,17 @@ Windows:
 
 ```powershell
 cd C:\path\to\your-project
-C:\path\to\promptguard-claude-demoV0\start-promptguard.cmd
+C:\path\to\promptguard-claude-demoV0\promptguard.cmd run
 ```
 
 macOS:
 
 ```bash
 cd /path/to/your-project
-/path/to/promptguard-claude-demoV0/start-promptguard.sh
+/path/to/promptguard-claude-demoV0/promptguard run
 ```
 
-## 4. Detector 모듈과 합의 정책
+## 5. Detector 모듈과 합의 정책
 
 detector는 여러 모듈을 **adapter**로 감싸 같은 인터페이스(`name`, `version`, `scan(text)`)로 다룹니다. detector 입장에서는 이름만 다른 adapter 여럿이 각자 span에 투표하는 구조이며, 합의 정책을 통과한 span만 placeholder로 바뀝니다.
 
@@ -214,7 +249,7 @@ class MyAdapter(DetectorAdapter):
 
 ## 중요 제한
 
-portable launcher는 **Mod-only 체험 모드**입니다. repository의 `src/guard/server.cjs`는 검증용 mock endpoint이며 실제 Anthropic provider forwarding proxy가 아닙니다. 따라서 detector나 Mod 장애 시 실제 provider-bound fail-closed를 보장하지 않습니다. 실제 민감정보 대신 우선 포함된 synthetic 프로젝트로 테스트하세요.
+`promptguard run`은 실제 provider forwarding Final Guard를 사용합니다. 반면 기존 `start-promptguard.*`는 **Mod-only 체험 모드**라서 provider-bound fail-closed를 보장하지 않습니다. synthetic mock provider/Guard fixture는 production source가 아닌 `tests/observability/`에만 있습니다. 실제 credential을 repository나 fixture에 넣지 말고, 포함된 synthetic 프로젝트로 먼저 검증하세요.
 
 또한 Claude Code 2.1.291의 `--append-system-prompt`는 Native Mod 훅에 보이지 않아 Mod가 변환할 수 없습니다. 검증 환경에서는 Final Guard가 이를 차단했습니다.
 
@@ -223,7 +258,10 @@ portable launcher는 **Mod-only 체험 모드**입니다. repository의 `src/gua
 ```text
 src/native-mod/             Claude Code Native Mod
 src/detector/               detector worker, adapters, consensus + local MCP bridge
-src/guard/                  validation-only Final Guard mock
+src/guard/                  production Final Guard
+src/supervisor/             cross-platform lifecycle/readiness/restart supervisor
+src/launcher/               promptguard CLI
+src/audit/                  raw-free audit writer
 sample-protected-project/   synthetic credential demo
 fixtures/                   labeled positive/negative corpus
 tests/                      detector/span/performance/Mod restore/E2E tests
@@ -238,12 +276,11 @@ outputs/                    machine-readable validation results
 node src/observability/server.mjs
 ```
 
-브라우저에서 `http://127.0.0.1:18880`을 열면 `.runtime/audit/`의 최신 Mod audit를 읽습니다.
-`PG_MOD_AUDIT`로 특정 audit 파일을 지정할 수 있습니다. UI 실행에는 npm 패키지가 필요하지 않습니다.
+브라우저에서 `http://127.0.0.1:18880`을 열면 Runtime V1의 `.promptguard/audit/mod-audit.json`과 `guard-audit.jsonl`을 읽습니다. 기존 Mod-only `.runtime/audit/` 기록도 fallback으로 지원합니다. `PG_MOD_AUDIT`와 `PG_GUARD_AUDIT`로 특정 파일을 지정할 수 있습니다. UI 실행에는 npm 패키지가 필요하지 않습니다.
 
 - Pipeline, session summary, event timeline, detector/rule/span 상세, Read/tool activity, replacement preview
 - Live 데이터와 완전히 분리된 **DEMO / MOCK** 시나리오 선택
-- 실제 provider-bound 검증이 없으므로 최종 Cloud egress는 항상 **NOT VERIFIED**
+- 선택한 session hash와 연결되는 실제 Final Guard audit이 있으면 최종 SAFE/BLOCKED, finding, latency, upstream status 표시
 - 실제 원문이나 raw tool output을 브라우저로 보내지 않음
 - Turn ID, 파일 경로, 고유 파일 수와 미제공 metadata는 추측하지 않고 unavailable 표시
 

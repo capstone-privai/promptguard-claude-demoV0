@@ -84,4 +84,6 @@ printf '\nPromptGuard Demo V0 installation complete\n'
 printf 'Python: %s\n' "$PYTHON_VERSION"
 printf 'CredSweeper: 1.19.0 (ML OFF)\n'
 printf 'Gitleaks: %s\n' "$GITLEAKS_STATUS"
-printf 'Next: cd sample-protected-project && ../start-promptguard.sh\n'
+chmod +x "$ROOT/promptguard" "$ROOT/start-promptguard.sh"
+printf 'Recommended: cd sample-protected-project && ../promptguard run\n'
+printf 'Legacy Mod-only demo: cd sample-protected-project && ../start-promptguard.sh\n'

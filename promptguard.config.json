@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "claudeBinary": "claude",
+  "claudeVersion": "2.1.291",
+  "strictClaudeVersion": true,
+  "pythonBinary": "auto",
+  "guardHost": "127.0.0.1",
+  "guardPort": 18191,
+  "modDetectorPort": 18771,
+  "guardDetectorPort": 18772,
+  "detectorTimeoutMs": 5000,
+  "maxBodyBytes": 8388608,
+  "workerRestartLimit": 3,
+  "restartBackoffMs": 250,
+  "restartBackoffMaxMs": 4000,
+  "healthCheckIntervalMs": 1000,
+  "healthFailureThreshold": 3,
+  "readinessTimeoutMs": 30000,
+  "shutdownTimeoutMs": 5000,
+  "auditPath": ".promptguard/audit",
+  "logLevel": "info",
+  "upstreamBaseUrl": "https://api.anthropic.com"
+}

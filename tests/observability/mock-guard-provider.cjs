@@ -1,3 +1,5 @@
+// Legacy validation fixture for synthetic observability scenarios. Production
+// provider traffic uses src/guard/final-guard.cjs.
 const http = require('http')
 const fs = require('fs')
 const path = require('path')

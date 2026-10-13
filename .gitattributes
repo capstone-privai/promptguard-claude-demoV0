@@ -1,6 +1,7 @@
 * text=auto
 
 *.cmd text eol=crlf
+promptguard text eol=lf
 *.ps1 text eol=crlf
 *.sh text eol=lf
 *.cjs text eol=lf

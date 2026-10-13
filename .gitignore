@@ -1,5 +1,7 @@
 .venv/
 .runtime/
+.runtime-*/
+.promptguard/
 __pycache__/
 *.pyc
 *.pyo

@@ -31,15 +31,33 @@ export function projectAudit(rows) {
   }))
 }
 
-export function projectGuard(record) {
-  if (!record || typeof record !== 'object') return null
-  const verified = record.guard_inspected === true && count(record.raw_marker_count) !== null
-  return {
-    scope: 'VALIDATION MOCK — not a Cloud provider',
-    decision: record.guard_allowed === false && typeof record.block_reason === 'string' ? 'BLOCKED' : verified && record.raw_marker_count === 0 && record.guard_allowed === true && record.guard_mode === 'normal' ? 'SAFE' : 'NOT VERIFIED',
-    remaining: verified ? count(record.raw_marker_count) : null,
-    scanned: verified ? count(record.scanned_payload_count) : null,
-    placeholders: count(record.placeholder_count),
-    reason: ['RAW_FOUND', 'DETECTOR_FAILURE', 'DETECTOR_TIMEOUT', 'DETECTOR_EXCEPTION', 'MALFORMED_DETECTOR', 'BODY_TOO_LARGE', 'UNSUPPORTED_CONTENT_TYPE', 'MALFORMED_JSON', 'UNKNOWN_ENDPOINT'].includes(record.block_reason) ? record.block_reason : null,
-  }
+const guardEndpoints = new Set(['/v1/messages', '/v1/messages/count_tokens', 'UNKNOWN'])
+const guardReason = value => typeof value === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(value) ? value : null
+const latency = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value * 1000) / 1000 : null
+
+export function projectGuardAudit(rows) {
+  if (!Array.isArray(rows)) throw new Error('GUARD_AUDIT_UNAVAILABLE')
+  return rows.slice(-2000).filter(record => record && typeof record === 'object' && !Array.isArray(record)).map((record, index) => {
+    const findingCount = count(record.finding_count)
+    const auditDecision = record.decision === 'allow' || record.decision === 'block' ? record.decision : null
+    const decision = auditDecision === 'block'
+      ? 'BLOCKED'
+      : auditDecision === 'allow' && findingCount === 0
+        ? 'SAFE'
+        : 'NOT VERIFIED'
+    return {
+      id: index,
+      scope: 'FINAL GUARD — provider-bound verification',
+      session: typeof record.session_hash === 'string' && /^[a-f0-9]{64}$/.test(record.session_hash) ? record.session_hash : 'unavailable',
+      timestamp: timestamp(record.timestamp),
+      endpoint: guardEndpoints.has(record.endpoint) ? record.endpoint : 'UNKNOWN',
+      bodySize: count(record.body_size),
+      findingCount,
+      findingTypes: Array.isArray(record.finding_types) ? [...new Set(record.finding_types.filter(value => types.has(value)))].sort() : [],
+      decision,
+      reason: guardReason(record.reason),
+      scanLatencyMs: latency(record.scan_latency_ms),
+      upstreamStatus: Number.isInteger(record.upstream_status) && record.upstream_status >= 100 && record.upstream_status <= 599 ? record.upstream_status : null,
+    }
+  })
 }
