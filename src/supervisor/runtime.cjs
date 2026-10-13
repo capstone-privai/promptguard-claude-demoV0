@@ -93,7 +93,7 @@ class RuntimeSupervisor {
     this.shuttingDown = false
     this.shutdownPromise = null
     this.exitCode = 0
-    this.sessionHash = crypto.randomBytes(16).toString('hex')
+    this.sessionHash = crypto.randomBytes(32).toString('hex')
     this.completion = new Promise(resolve => { this.resolveCompletion = resolve })
   }
 
