@@ -7,10 +7,10 @@ Claude Code 2.1.291 Native Mod와 여러 detector 모듈(CredSweeper 1.19.0, Git
 ## 준비물
 
 - Windows PowerShell 5.1 이상 또는 macOS의 Bash
-- Python 3.12 (PATH 등록)
+- Python 3.12 (PATH 등록). 설치 스크립트는 3.12를 찾고, `promptguard run`은 3.14로 만든 `.venv`도 사용할 수 있습니다.
 - Node.js LTS
 - macOS: Xcode Command Line Tools (`xcode-select --install`)
-- Claude Code 2.1.291
+- Claude Code 2.1.291 (기본 설정은 이 버전만 허용합니다. 다른 버전은 아래 [버전 고정](#claude-code-버전-고정) 참고)
 - 선택: Gitleaks 8.x (`brew install gitleaks`, Windows는 `scoop install gitleaks` 또는 GitHub release). 없으면 gitleaks 모듈만 건너뜁니다.
 - Claude Pro/Max/Team/Enterprise 계정 또는 Anthropic Console billing
 
@@ -44,8 +44,6 @@ chmod +x install.sh
 ./install.sh
 ```
 
-`promptguard run`은 Python 3.14로 만든 `.venv`도 사용할 수 있습니다. 설치 스크립트는 여전히 3.12를 찾습니다.
-
 Python 3.12나 Node.js가 없다면 Homebrew를 사용하는 환경에서는 `brew install python@3.12 node`로 설치할 수 있습니다. 별도 Python 경로를 사용하려면 `PROMPTGUARD_PYTHON=/path/to/python3.12 ./install.sh`처럼 지정합니다. 설치 스크립트가 `promptguard`와 기존 launcher에 실행 권한을 설정합니다.
 
 ## 2. 권장 실행: Runtime V1 + Final Guard
@@ -71,11 +69,19 @@ cd sample-protected-project
 ../promptguard run
 ```
 
+> PromptGuard 훅과 Final Guard는 `promptguard run`이 Claude Code를 띄울 때 실행 옵션(`--plugin-dir`, `--mcp-config`, `ANTHROPIC_BASE_URL`)으로 붙입니다. 보호 프로젝트 폴더에서 `claude`를 직접 실행하면 아무 보호도 적용되지 않습니다. 보호 중이면 시작할 때 `✓ Final Guard ready`와 `Protection active`가 출력됩니다.
+
 Claude 인수를 넘길 때는 `--` 뒤에 적습니다. 예: `../promptguard run -- --resume`. Claude 로그인 없이 서비스만 검증하려면 `--no-claude`를 사용하고, 다른 터미널에서 `../promptguard status` 또는 `..\promptguard.cmd status`로 raw-free 상태와 차단 counter를 확인할 수 있습니다.
 
-기본 설정은 repository의 `promptguard.config.json`이며 `--config FILE`로 바꿀 수 있습니다. strict schema이므로 오타나 알 수 없는 필드는 시작 전에 거부합니다. Claude Code 버전은 기본적으로 `2.1.291`과 정확히 일치해야 합니다.
+기본 설정은 repository의 `promptguard.config.json`이며 `--config FILE`로 바꿀 수 있습니다. strict schema이므로 오타나 알 수 없는 필드는 시작 전에 거부합니다.
+
+### Claude Code 버전 고정
+
+기본 설정은 Claude Code 버전이 `2.1.291`과 정확히 일치해야 Claude를 시작합니다. 다른 버전(예: 2.1.296)으로 실행하려면 `promptguard.config.json`을 복사해 `"strictClaudeVersion": false`로 바꾸고 `--config`로 지정합니다. 이 경우 시작할 때 버전 경고만 출력합니다. 설정 파일 안의 상대 경로(`auditPath` 등)는 설정 파일 위치 기준으로 해석되므로, 복사본을 다른 폴더에 둘 때는 `auditPath`를 절대 경로로 적습니다.
 
 Final Guard는 실제 Anthropic upstream으로 전달되는 `/v1/messages`와 `/v1/messages/count_tokens` JSON의 모든 문자열 leaf를 다시 검사합니다. finding뿐 아니라 detector timeout, crash, malformed response, body 제한 위반과 알 수 없는 endpoint도 provider 전송 전에 차단합니다. 요청 원문, credential, authorization header는 audit에 남기지 않습니다.
+
+이미 깨끗하다고 판정된 문자열은 다시 검사하지 않으므로, 매 turn 반복되는 system prompt와 tool 정의는 세션의 첫 요청에서만 검사됩니다. 그래서 첫 요청은 오래 걸릴 수 있고(claude.ai 커넥터가 많으면 10~20초), 이후 요청은 새로 추가된 대화만 검사합니다.
 
 > 두 worker는 process와 lifecycle이 독립적이지만 같은 최신 detector ensemble 설정을 사용합니다. 따라서 Mod 장애, 변환 뒤 재노출, worker 하나의 장애를 최종 전송 지점에서 막는 의미가 있습니다. 반면 모든 adapter가 공통으로 놓치는 패턴은 Guard도 놓칠 수 있으므로, detector 다양성과 coverage 검증은 별도 과제입니다.
 
@@ -99,7 +105,9 @@ cd sample-protected-project
 ../start-promptguard.sh
 ```
 
-Claude 로그인 화면이 처음 나오면 구독 계정 사용자는 `Claude account with subscription`을 선택합니다. 계정이나 token을 팀원끼리 공유하지 마세요.
+## 4. 체험 질문과 기대 결과
+
+두 실행 경로 모두 같은 방법으로 확인합니다. Claude 로그인 화면이 처음 나오면 구독 계정 사용자는 `Claude account with subscription`을 선택합니다. 계정이나 token을 팀원끼리 공유하지 마세요.
 
 Claude에 다음을 입력합니다.
 
@@ -114,7 +122,8 @@ DB 연결이 실패하는 원인을 찾아줘.
 - password/API key/token은 `[PASSWORD_n]`, `[API_KEY_n]`, `[TOKEN_n]`으로 전달
 - `demo-db.internal`, `orders`, `5440`, expected `5432`, `E_PORT_MISMATCH`는 보존
 - Claude가 port mismatch를 원인으로 진단
-- raw-free audit은 `.runtime/audit/`에 생성
+- `!cat .env`처럼 직접 실행한 명령의 출력도 placeholder로만 전달
+- raw-free audit은 Runtime V1이면 `.promptguard/audit/`, 기존 launcher면 `.runtime/audit/`에 생성
 
 ## `!` 셸 모드 입력 마스킹
 
@@ -127,17 +136,17 @@ Claude Code에서 `!`로 직접 실행한 명령과 그 출력은 `prompt.submit
 1. 마스킹할 때 `placeholder → 원래 값`을 Mod 프로세스 메모리(vault)에만 기록합니다. 파일, audit, 모델로는 내보내지 않습니다.
 2. 로컬에서 실행되는 도구(`Bash`, `PowerShell`, `Edit`, `MultiEdit`, `Write`, `NotebookEdit`, `Grep`)의 입력에서 알려진 placeholder를 원래 값으로 바꿔 실행합니다. 모르는 placeholder는 그대로 둡니다.
 3. `Agent`, `WebFetch`, MCP 도구처럼 입력이 다른 모델이나 외부로 나가는 도구는 원복하지 않습니다.
-4. 실행 결과에 원래 값이 다시 나오면(예: `echo`로 출력), CredSweeper 검사 뒤에 vault 기준으로 한 번 더 확인해 탐지기가 놓친 값을 같은 placeholder로 다시 가립니다(re-mask).
+4. 실행 결과에 원래 값이 다시 나오면(예: `echo`로 출력), detector 검사 뒤에 vault 기준으로 한 번 더 확인해 탐지기가 놓친 값을 같은 placeholder로 다시 가립니다(re-mask).
 5. audit에는 값 없이 `restored_count`, `remasked_count` 개수만 남습니다.
 
 끄려면 `PG_RESTORE_PLACEHOLDERS=off`를 지정합니다.
 
 ### 원복한 값이 모델로 다시 실려 가는가? (E2E 검증)
 
-실제 Claude Code CLI + Native Mod + CredSweeper worker를 가짜 Anthropic API에 연결해, provider로 나가는 요청을 전부 기록하고 확인했습니다 (Claude Code 2.1.296에서 확인).
+실제 Claude Code CLI + Native Mod + detector worker를 가짜 Anthropic API에 연결해, provider로 나가는 요청을 전부 기록하고 확인했습니다 (Claude Code 2.1.296에서 확인).
 
 - Claude Code는 대화 기록에 **모델이 쓴 원래 입력**(`[PASSWORD_1]`이 든 명령)을 남기고, 훅이 바꾼 입력(원래 값)은 실행에만 씁니다. 같은 turn의 후속 요청, `--resume`한 다음 turn 요청, 로컬 transcript(`.jsonl`) 어디에도 원래 값이 없습니다.
-- 다만 원복된 명령이 원래 값을 **출력**하면(예: `printf`로 값만 출력) CredSweeper는 `key=value` 문맥이 없어 탐지하지 못합니다. 이 경우는 re-mask가 막습니다. re-mask를 끄고 돌리면 원래 값이 provider 요청과 transcript에 그대로 실려 가는 것을 확인했습니다.
+- 다만 원복된 명령이 원래 값을 **출력**하면(예: `printf`로 값만 출력) `key=value` 같은 문맥이 없어 detector가 탐지하지 못할 수 있습니다(검증 당시 CredSweeper는 탐지하지 못했습니다). 이 경우는 re-mask가 막습니다. re-mask를 끄고 돌리면 원래 값이 provider 요청과 transcript에 그대로 실려 가는 것을 확인했습니다.
 
 테스트:
 
@@ -148,7 +157,7 @@ node tests/e2e/restore_history.mjs       # E2E (설치 후, Claude Code와 .venv
 
 E2E 증거(기록된 provider 요청, audit)는 `.runtime/e2e-restore/`에 남습니다.
 
-## 4. 다른 프로젝트에서 실행
+## 5. 다른 프로젝트에서 실행
 
 Windows:
 
@@ -166,7 +175,7 @@ cd /path/to/your-project
 /path/to/promptguard-claude-demoV0/promptguard run
 ```
 
-## 5. Detector 모듈과 합의 정책
+## 6. Detector 모듈과 합의 정책
 
 detector는 여러 모듈을 **adapter**로 감싸 같은 인터페이스(`name`, `version`, `scan(text)`)로 다룹니다. detector 입장에서는 이름만 다른 adapter 여럿이 각자 span에 투표하는 구조이며, 합의 정책을 통과한 span만 placeholder로 바뀝니다.
 
@@ -201,14 +210,16 @@ detector는 여러 모듈을 **adapter**로 감싸 같은 인터페이스(`name`
 설정 파일을 고치지 않고 실행할 때만 바꾸려면 환경 변수를 씁니다. `PG_DETECTOR_CONSENSUS`는 `any`, `majority`, `unanimous`, `at_least:2`(또는 `2`)를 받고, `PG_DETECTOR_CONFIG`는 다른 설정 파일 경로를 받습니다.
 
 ```bash
-PG_DETECTOR_CONSENSUS=unanimous ../start-promptguard.sh
+PG_DETECTOR_CONSENSUS=unanimous ../promptguard run
 ```
 
 ```powershell
-$env:PG_DETECTOR_CONSENSUS = 'at_least:2'; ..\start-promptguard.cmd
+$env:PG_DETECTOR_CONSENSUS = 'at_least:2'; ..\promptguard.cmd run
 ```
 
-launcher는 시작할 때 활성 모듈과 정책을 출력합니다(`Detector: credsweeper, gitleaks, promptguard-rules (consensus majority, 2 vote(s) needed)`).
+Runtime V1에서는 이 값이 Mod용·Guard용 detector worker 모두에 적용됩니다. 기존 `start-promptguard.*` launcher에도 같은 환경 변수를 쓸 수 있습니다.
+
+기존 `start-promptguard.*` launcher는 시작할 때 활성 모듈과 정책을 출력합니다(`Detector: credsweeper, gitleaks, promptguard-rules (consensus majority, 2 vote(s) needed)`).
 
 판정 규칙:
 
@@ -255,7 +266,7 @@ class MyAdapter(DetectorAdapter):
 
 ## 중요 제한
 
-`promptguard run`은 실제 provider forwarding Final Guard를 사용합니다. 반면 기존 `start-promptguard.*`는 **Mod-only 체험 모드**라서 provider-bound fail-closed를 보장하지 않습니다. synthetic mock provider/Guard fixture는 production source가 아닌 `tests/observability/`에만 있습니다. 실제 credential을 repository나 fixture에 넣지 말고, 포함된 synthetic 프로젝트로 먼저 검증하세요.
+`promptguard run`은 실제 provider forwarding Final Guard를 사용합니다. 반면 기존 `start-promptguard.*`는 **Mod-only 체험 모드**라서 provider-bound fail-closed를 보장하지 않습니다. synthetic mock provider/Guard/detector fixture는 production source가 아닌 `tests/observability/`와 `tests/final-guard/`에만 있습니다. 실제 credential을 repository나 fixture에 넣지 말고, 포함된 synthetic 프로젝트로 먼저 검증하세요.
 
 또한 Claude Code 2.1.291의 `--append-system-prompt`는 Native Mod 훅에 보이지 않아 Mod가 변환할 수 없습니다. 검증 환경에서는 Final Guard가 이를 차단했습니다.
 
@@ -270,13 +281,13 @@ src/launcher/               promptguard CLI
 src/audit/                  raw-free audit writer
 sample-protected-project/   synthetic credential demo
 fixtures/                   labeled positive/negative corpus
-tests/                      detector/span/performance/Mod restore/E2E tests
+tests/                      detector/span/performance/Mod/Final Guard/observability/E2E tests
 outputs/                    machine-readable validation results
 ```
 
 ## Observability Web UI
 
-기존 launcher는 그대로 사용합니다. 별도 터미널에서 Node.js 22 이상으로 실행하세요.
+`promptguard run`(또는 기존 launcher)을 실행해 둔 상태에서, 별도 터미널에서 Node.js 22 이상으로 실행하세요.
 
 ```bash
 node src/observability/server.mjs

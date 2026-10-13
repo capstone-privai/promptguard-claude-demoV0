@@ -10,7 +10,7 @@ Native Mod -> .promptguard/audit/mod-audit.json -> projectAudit() ------+
 Final Guard -> .promptguard/audit/guard-audit.jsonl -> projectGuardAudit() -+
 ```
 
-The Mod stream shows prompt/context/tool scans, findings, placeholder replacements, and failure stages. The Final Guard stream shows provider-bound SAFE/BLOCKED decisions, endpoint, body size, finding count/types, scan latency, reason code, and observed upstream HTTP status.
+The Mod stream shows prompt/context/tool scans, `!` shell-mode rows (recorded by the `session.append` hook with source `user_command`, displayed as USER_PROMPT), findings, placeholder replacements, and failure stages. The Final Guard stream shows provider-bound SAFE/BLOCKED decisions, endpoint, body size, finding count/types, scan latency, reason code, and observed upstream HTTP status.
 
 Guard records are correlated to the selected Mod session only by the existing 64-character `session_hash`. If no matching Final Guard record exists, the UI reports NOT VERIFIED. It does not infer a successful provider transmission from Mod masking alone.
 

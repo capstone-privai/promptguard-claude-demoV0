@@ -59,7 +59,9 @@ Supervisor는 Python 3.12와 3.14 detector worker를 모두 받습니다.
 
 Final Guard는 Native Mod가 비활성화되거나 변환 뒤 raw 값이 다시 생기는 경우에도 provider 직전에서 별도로 차단하고, detector worker 장애에는 fail-closed 합니다. 그러나 같은 detector ensemble과 규칙을 사용하므로 모든 adapter가 공통으로 놓치는 credential 형식은 두 단계 모두 통과할 수 있습니다. 이것은 detector 다양화, 정책 튜닝, labeled corpus 회귀 테스트로 관리해야 합니다.
 
-Guard를 우회해 `ANTHROPIC_BASE_URL`을 다른 곳으로 지정한 별도 Claude process를 실행하는 행위, Claude Code 외의 독립 network client, endpoint pinning을 우회하는 로컬 관리자 공격은 이 portable demo의 보호 범위 밖입니다.
+보호는 `promptguard run`이 띄운 Claude Code에만 적용됩니다. 같은 폴더에서 `claude`를 직접 실행하면 Mod와 Guard가 모두 빠지며, 이를 막는 장치는 없습니다. Guard를 우회해 `ANTHROPIC_BASE_URL`을 다른 곳으로 지정한 별도 Claude process를 실행하는 행위, Claude Code 외의 독립 network client, endpoint pinning을 우회하는 로컬 관리자 공격은 이 portable demo의 보호 범위 밖입니다.
+
+세션의 첫 요청은 캐시가 비어 있어 모든 서로 다른 문자열을 한 번씩 검사합니다. claude.ai 커넥터가 많은 계정에서는 첫 요청에 10~20초가 걸리고, 이후 요청은 수백 ms 수준입니다.
 
 ## 검증 명령
 
