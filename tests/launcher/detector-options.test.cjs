@@ -3,6 +3,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { detectorEnvironment } = require('../../src/launcher/detector-options.cjs')
+const { parseRun } = require('../../src/launcher/cli.cjs')
 
 const clean = {} // an environment with no PG_* detector variables
 
@@ -49,4 +50,14 @@ test('environment variables still work when no option is given', () => {
   const result = detectorEnvironment({}, { PG_DETECTOR_ENABLE: 'ml-v9' })
   assert.ok(result.active.includes('ml-v9'))
   assert.equal(result.env.PG_READINESS_TIMEOUT_MS, '180000')
+})
+
+test('run options parse, including a list split by PowerShell', () => {
+  assert.deepEqual(parseRun(['--enable', 'ml-v9,ml-qwen']).detector, { enable: 'ml-v9,ml-qwen' })
+  const split = parseRun(['--enable', 'ml-v9', 'ml-qwen', '--disable', 'shell-aware', '--policy', 'union', '--', '--model', 'x'])
+  assert.deepEqual(split.detector, { enable: 'ml-v9,ml-qwen', disable: 'shell-aware', policy: 'union' })
+  assert.deepEqual(split.claudeArgs, ['--model', 'x'])
+  assert.equal(parseRun(['--enable', 'ml-v9', '--no-claude']).noClaude, true)
+  assert.throws(() => parseRun(['--enable']), /requires a value/)
+  assert.throws(() => parseRun(['--bogus']), /unknown run option/)
 })

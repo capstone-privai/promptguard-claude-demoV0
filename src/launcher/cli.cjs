@@ -52,6 +52,15 @@ function requireValue(args, index, option) {
   return value
 }
 
+// A detector list may arrive as one argument ("ml-v9,ml-qwen") or, from
+// PowerShell, which turns a,b into separate arguments, as several.
+function listValue(args, index, option) {
+  const parts = [requireValue(args, index, option)]
+  let next = index + 2
+  while (next < args.length && !String(args[next]).startsWith('-')) parts.push(args[next++])
+  return { value: parts.join(','), consumed: next - index - 1 }
+}
+
 function parseRun(args) {
   const options = { noClaude: false, configPath: null, runtimeDirectory: null, claudeArgs: [], detector: {} }
   for (let index = 0; index < args.length; index += 1) {
@@ -63,8 +72,11 @@ function parseRun(args) {
     if (item === '--no-claude') options.noClaude = true
     else if (item === '--config') options.configPath = requireValue(args, index++, item)
     else if (item === '--runtime-dir') options.runtimeDirectory = requireValue(args, index++, item)
-    else if (item === '--enable') options.detector.enable = requireValue(args, index++, item)
-    else if (item === '--disable') options.detector.disable = requireValue(args, index++, item)
+    else if (item === '--enable' || item === '--disable') {
+      const { value, consumed } = listValue(args, index, item)
+      options.detector[item.slice(2)] = value
+      index += consumed
+    }
     else if (item === '--policy') options.detector.policy = requireValue(args, index++, item)
     else if (item === '--detector-timeout-ms') options.detector.detectorTimeoutMs = requireValue(args, index++, item)
     else if (item === '--readiness-timeout-ms') options.detector.readinessTimeoutMs = requireValue(args, index++, item)
@@ -238,9 +250,13 @@ async function main(argv) {
   throw new Error('An unknown PromptGuard command was provided.')
 }
 
-main(process.argv.slice(2)).then(code => {
-  process.exitCode = code
-}).catch(error => {
-  console.error(`PromptGuard command failed: ${conciseError(error)}`)
-  process.exitCode = 1
-})
+if (require.main === module) {
+  main(process.argv.slice(2)).then(code => {
+    process.exitCode = code
+  }).catch(error => {
+    console.error(`PromptGuard command failed: ${conciseError(error)}`)
+    process.exitCode = 1
+  })
+}
+
+module.exports = { parseRun }
