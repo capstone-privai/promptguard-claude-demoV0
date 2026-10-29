@@ -9,7 +9,7 @@
     "start:observability": "node src/observability/server.mjs",
     "start:runtime": "node src/launcher/cli.cjs run",
     "status:runtime": "node src/launcher/cli.cjs status",
-    "test": "node --test tests/observability/*.test.mjs tests/mod/test_restore.mjs tests/final-guard/guard.test.cjs",
+    "test": "node --test tests/observability/*.test.mjs tests/mod/test_restore.mjs tests/final-guard/guard.test.cjs tests/launcher/*.test.cjs",
     "test:final-guard": "node --test tests/final-guard/guard.test.cjs",
     "selftest:runtime": "node src/supervisor/selftest.cjs",
     "check:runtime": "node --check src/guard/final-guard.cjs && node --check src/guard/lib.cjs && node --check src/launcher/cli.cjs && node --check src/supervisor/runtime.cjs",
