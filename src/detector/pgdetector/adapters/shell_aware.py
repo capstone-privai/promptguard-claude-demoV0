@@ -43,6 +43,17 @@ LONG_OPTIONS = {
     "client-secret": "SECRET", "api-key": "API_KEY",
 }
 # (command, subcommand) -> whether a separate token after ``-p`` is the password.
+# Prose that names an option ("the --password option of mysql", "--api-key of the account") puts an ordinary
+# word where a separated value would go. Those words are never taken as the value; a value written with "="
+# (--password=of) is still taken as written.
+PROSE_WORDS = frozenset("""
+a an the of by or and nor on in at to for from with without into onto over under via per than then
+is are was were be been being am do does did has have had can could may might must shall should will would
+it its this that these those which who whom whose what when where while if as so not no only also just
+flag flags option options argument arguments arg args parameter parameters param value values field fields
+instead here there each every any all some such etc e.g i.e
+""".split())
+
 SHORT_PASSWORD_COMMANDS = {
     ("sshpass", None): True,
     ("docker", "login"): True,
@@ -221,6 +232,11 @@ def plausible(value: str) -> bool:
     )
 
 
+def prose_word(token: ShellToken) -> bool:
+    """A bare (unquoted) ordinary word after an option name, as in prose about the option."""
+    return token.raw == token.value and token.value.lower().rstrip(".,;:)") in PROSE_WORDS
+
+
 def finding(start: int, end: int, kind: str, family: str, strength: str, **evidence: str) -> RawFinding:
     return RawFinding(start, end, kind, f"shell-{family}", strength, family, evidence)
 
@@ -267,7 +283,7 @@ def split_args(args: str) -> list[str]:
 
 
 class ShellAwareAdapter(DetectorAdapter):
-    version = "0.2.0"
+    version = "0.2.1"
 
     def __init__(self, name: str, options: Mapping[str, Any], config_dir: Path) -> None:
         super().__init__(name, options, config_dir)
@@ -317,7 +333,7 @@ class ShellAwareAdapter(DetectorAdapter):
                 candidate = attached_finding(token, 2 + len(option) + 1, kind, "long_option", "strong", option=f"--{normalized}")
             else:
                 value_token = tokens[index + 1] if index + 1 < len(tokens) else None
-                if value_token is not None and value_token.value.startswith("-"):
+                if value_token is not None and (value_token.value.startswith("-") or prose_word(value_token)):
                     value_token = None
                 candidate = token_finding(value_token, kind, "long_option", "strong", option=f"--{normalized}")
             if candidate:
