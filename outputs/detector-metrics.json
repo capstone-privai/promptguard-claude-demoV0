@@ -1,23 +1,46 @@
 {
   "detector": "ensemble",
+  "candidate_policy": "union",
   "consensus": "majority",
-  "required_votes": 2,
+  "required_votes": 1,
+  "majority_required_votes": 2,
   "adapters": [
     {
       "name": "credsweeper",
       "version": "1.19.0"
     },
     {
-      "name": "gitleaks",
-      "version": "8.30.1"
-    },
-    {
       "name": "promptguard-rules",
       "version": "0.1.0"
+    },
+    {
+      "name": "shell-aware",
+      "version": "0.2.0"
     }
   ],
-  "skipped": [],
-  "ml": false,
+  "protection_adapters": [
+    "credsweeper",
+    "promptguard-rules",
+    "shell-aware"
+  ],
+  "majority_adapters": [
+    "credsweeper",
+    "promptguard-rules"
+  ],
+  "candidate_adapters": [
+    "credsweeper",
+    "promptguard-rules",
+    "shell-aware"
+  ],
+  "candidate_only_adapters": [
+    "shell-aware"
+  ],
+  "skipped": [
+    {
+      "name": "gitleaks",
+      "reason": "gitleaks binary 'gitleaks' not found"
+    }
+  ],
   "offset_unit": "utf16_code_units",
   "tp": 32,
   "fp": 0,
@@ -26,6 +49,15 @@
   "recall": 1.0,
   "f1": 1.0,
   "f2": 1.0,
+  "candidate_union": {
+    "tp": 32,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "f2": 1.0
+  },
   "adapter_errors": [],
   "policy_comparison": [
     {
@@ -53,13 +85,13 @@
     {
       "required_votes": 3,
       "label": "unanimous",
-      "tp": 8,
+      "tp": 0,
       "fp": 0,
-      "fn": 24,
-      "precision": 1.0,
-      "recall": 0.25,
-      "f1": 0.4,
-      "f2": 0.29411764705882354
+      "fn": 32,
+      "precision": 0,
+      "recall": 0.0,
+      "f1": 0,
+      "f2": 0
     }
   ],
   "per_adapter": {
@@ -72,15 +104,6 @@
       "f1": 1.0,
       "f2": 1.0
     },
-    "gitleaks": {
-      "tp": 8,
-      "fp": 0,
-      "fn": 24,
-      "precision": 1.0,
-      "recall": 0.25,
-      "f1": 0.4,
-      "f2": 0.29411764705882354
-    },
     "promptguard-rules": {
       "tp": 32,
       "fp": 0,
@@ -89,10 +112,21 @@
       "recall": 1.0,
       "f1": 1.0,
       "f2": 1.0
+    },
+    "shell-aware": {
+      "tp": 0,
+      "fp": 0,
+      "fn": 32,
+      "precision": 0,
+      "recall": 0.0,
+      "f1": 0,
+      "f2": 0
     }
   },
   "false_positives": [],
   "false_negatives": [],
+  "candidate_union_false_positives": [],
+  "candidate_union_false_negatives": [],
   "per_file": [
     {
       "file": ".env",
@@ -101,8 +135,8 @@
       "errors": [],
       "votes": {
         "credsweeper": 3,
-        "gitleaks": 0,
-        "promptguard-rules": 3
+        "promptguard-rules": 3,
+        "shell-aware": 0
       }
     },
     {
@@ -112,8 +146,8 @@
       "errors": [],
       "votes": {
         "credsweeper": 4,
-        "gitleaks": 0,
-        "promptguard-rules": 4
+        "promptguard-rules": 4,
+        "shell-aware": 0
       }
     },
     {
@@ -123,8 +157,8 @@
       "errors": [],
       "votes": {
         "credsweeper": 9,
-        "gitleaks": 3,
-        "promptguard-rules": 6
+        "promptguard-rules": 6,
+        "shell-aware": 0
       }
     },
     {
@@ -134,8 +168,8 @@
       "errors": [],
       "votes": {
         "credsweeper": 2,
-        "gitleaks": 0,
-        "promptguard-rules": 2
+        "promptguard-rules": 2,
+        "shell-aware": 0
       }
     },
     {
@@ -145,8 +179,8 @@
       "errors": [],
       "votes": {
         "credsweeper": 2,
-        "gitleaks": 0,
-        "promptguard-rules": 2
+        "promptguard-rules": 2,
+        "shell-aware": 0
       }
     },
     {
@@ -156,8 +190,8 @@
       "errors": [],
       "votes": {
         "credsweeper": 3,
-        "gitleaks": 0,
-        "promptguard-rules": 2
+        "promptguard-rules": 2,
+        "shell-aware": 0
       }
     },
     {
@@ -167,8 +201,8 @@
       "errors": [],
       "votes": {
         "credsweeper": 2,
-        "gitleaks": 0,
-        "promptguard-rules": 2
+        "promptguard-rules": 2,
+        "shell-aware": 0
       }
     },
     {
@@ -178,8 +212,8 @@
       "errors": [],
       "votes": {
         "credsweeper": 3,
-        "gitleaks": 0,
-        "promptguard-rules": 3
+        "promptguard-rules": 3,
+        "shell-aware": 0
       }
     },
     {
@@ -189,8 +223,8 @@
       "errors": [],
       "votes": {
         "credsweeper": 4,
-        "gitleaks": 1,
-        "promptguard-rules": 4
+        "promptguard-rules": 4,
+        "shell-aware": 0
       }
     },
     {
@@ -200,8 +234,8 @@
       "errors": [],
       "votes": {
         "credsweeper": 4,
-        "gitleaks": 4,
-        "promptguard-rules": 4
+        "promptguard-rules": 4,
+        "shell-aware": 0
       }
     },
     {
@@ -211,8 +245,8 @@
       "errors": [],
       "votes": {
         "credsweeper": 0,
-        "gitleaks": 0,
-        "promptguard-rules": 0
+        "promptguard-rules": 0,
+        "shell-aware": 0
       }
     }
   ],

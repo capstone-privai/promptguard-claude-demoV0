@@ -1,9 +1,9 @@
 # Shell-aware v0.2와 union 마스킹
 
 작성일: 2026-10-29
-판정: **MODIFY** — union 마스킹과 shell-aware v0.2는 데모 기본값으로 쓴다. CredSweeper·Gitleaks를 포함한 재측정과 held-out 검증 전까지 성능 주장은 synthetic 범위로 제한한다.
+판정: **MODIFY** — union 마스킹과 shell-aware v0.2는 데모 기본값으로 쓴다. held-out 검증 전까지 성능 주장은 synthetic 범위로 제한한다.
 
-표기: **[측정]** 이 문서 작성 환경에서 실행한 결과. **[PC]** 세훈 PC에서 다시 만들어야 하는 결과. **[제안]** 다음 단계.
+표기: **[클라우드]** 사내 adapter와 stub만으로 측정한 결과. **[PC]** 세훈 PC(Windows, Python 3.14.0, CredSweeper 1.19.0, Gitleaks 미설치)에서 커밋 `b6d8de2`로 측정한 결과. **[제안]** 다음 단계.
 
 ## Summary
 
@@ -57,24 +57,67 @@ findings ──> Native Mod: [TYPE_n]으로 값만 마스킹, 로컬 tool 실행
 4. 기존 fixture(32 span)에 shell-aware 단독 FP가 생기는지 확인
 5. 지연: 평가셋 55개 × 20회, 16K자 입력
 
-이 환경에서는 PyPI에 접속할 수 없어 CredSweeper를 설치하지 못했다. Gitleaks도 실행하지 않았다. 그래서 1~5는 사내 adapter(promptguard-rules, shell-aware)와 stub으로만 돌렸다.
+클라우드 환경은 PyPI 접속이 막혀 CredSweeper 없이 1~5를 돌렸다. 같은 날 세훈 PC에서 CredSweeper 1.19.0을 넣어 전체 테스트와 6~7을 다시 돌렸다.
+
+6. 기존 fixture 32 span을 union 정책으로 재측정 (`run_detector_tests.py`)
+7. 확장 평가셋 55개에서 기준선(CredSweeper ∪ rules) 대비 +shell-aware 비교 (`evaluate_shell_aware.py`)
 
 ## Results
 
-| 항목 | 결과 |
-|---|---|
-| [측정] Python 테스트 | candidate_policy 8/8, shell_aware 9/9, regression 8/8, consensus 19/19, normalize 7/7 |
-| [측정] Node 테스트 | 16/18. 실패 2개는 환경 문제(`jsdom` 미설치, 실제 CredSweeper 필요)이고 변경 전 코드도 같음 |
-| [측정] 확장 평가셋 shell-aware 단독 | gold 27 중 25 커버, FP 0. 놓친 2개는 범위 밖인 `password = "..."` 대입 |
-| [측정] promptguard-rules + shell-aware | 27/27 커버, FP 0 |
-| [측정] promptguard-rules 단독 | 5/27 |
-| [측정] 기존 fixture에서 shell-aware FP | 0 |
-| [측정] 마스킹 후 재스캔 | 재탐지 0 (fixture 9개 + 평가셋 55개) |
-| [측정] shell-aware 지연 | p50 0.062ms, p95 0.149ms. 16K자 입력 12.9ms. 비정상 16K 입력 최대 약 60ms |
-| [PC] CredSweeper·Gitleaks 포함 union | 아래 "PC에서 재측정"으로 생성 |
+### 테스트
+
+| 항목 | [PC] | [클라우드] |
+|---|---|---|
+| test_candidate_policy | 8/8 | 8/8 |
+| test_shell_aware | 9/9 | 9/9 |
+| test_shell_aware_regression | 8/8 | 8/8 |
+| test_consensus / test_normalize | PASS 19/19, 7/7 | PASS |
+| Node (`npm test`) | **31/31** | 16/18 (jsdom·CredSweeper 없음) |
+
+PC의 Node 31개에는 실제 CredSweeper → Native Mod → Final Guard SAFE/BLOCKED 경로 테스트가 들어 있다.
+
+### 기존 fixture (32 span, union 정책) [PC]
+
+| 구성 | TP | FP | FN |
+|---|---:|---:|---:|
+| union (CredSweeper ∪ rules ∪ shell-aware) | 32 | 0 | 0 |
+| CredSweeper 단독 | 32 | 0 | 0 |
+| promptguard-rules 단독 | 32 | 0 | 0 |
+| shell-aware 단독 | 0 | 0 | 32 |
+
+shell-aware는 key=value fixture에서 아무것도 내지 않았다. union으로 바꿔도 기존 fixture에 오탐이 생기지 않았다는 뜻이다. 이 스크립트의 `unanimous` 줄(0/32)은 union 모드에서 shell-aware까지 투표자로 세기 때문이라 의미가 없다.
+
+### 확장 평가셋 55개 (gold 27, gold 없는 case 28) [PC]
+
+| 구성 | Exposure recall | Precision | FP | FN | Partial leak |
+|---|---:|---:|---:|---:|---:|
+| 기준선: CredSweeper ∪ rules | 25.9% (7/27) | 77.8% | 2 | 20 | 0 |
+| + shell-aware (= 데모 union) | **100% (27/27)** | 93.1% | 2 | 0 | 0 |
+| shell-aware 단독 | 92.6% (25/27) | 100% | 0 | 2 | 0 |
+
+- shell-aware가 새로 덮은 secret 20개, 기존 후보가 사라진 사례 0개.
+- FP 2개(`expect-sendline`, `function-set-password`)는 기준선에서 이미 나던 것으로, CredSweeper 쪽 후보다. shell-aware가 늘린 FP는 0이다.
+- shell-aware 단독 FN 2개는 범위 밖인 `password = "..."` 대입이고, CredSweeper와 rules가 잡는다.
+- family별 shell-aware 결과: long_option 4/4, short_option 6/6, stdin_sink 3/3, here_string 1/1, heredoc 3/3, expect_send 2/2, function_argument 4/4, PowerShell 2/2, 모두 FP 0.
+
+### 지연 (PC, 55 case, adapter 병렬, 모델 로드·HTTP 제외)
+
+| 경로 | p50 | p95 |
+|---|---:|---:|
+| 기준선 union | 0.44 ms | 0.71 ms |
+| + shell-aware | 0.65 ms | 1.12 ms |
+| shell-aware 단독 | 0.08 ms | 0.15 ms |
+
+Gitleaks가 빠져 있어서 프로세스 기동 비용이 없는 수치다. Gitleaks를 켜면 이전처럼 요청당 수십 ms가 더해진다.
+
+### 기타 [클라우드]
+
+- 마스킹 후 재스캔: fixture 9개 + 평가셋 55개에서 사내 adapter 재탐지 0
+- 비정상 16K자 입력(`<` 반복, `<<` 반복, 따옴표 반복 등): 최대 약 60 ms
 
 ## Limitations
 
+- **Gitleaks 없이 측정했다.** PC에 Gitleaks가 설치돼 있지 않아 기준선이 CredSweeper ∪ rules다. 비교표에 Gitleaks를 넣으려면 설치 후 `evaluate_shell_aware.py`를 다시 돌린다.
 - **확장 평가셋도 순환 위험이 있다.** `rv-` 케이스는 v0.2를 고친 쪽(리뷰어)이 만들었다. v0.1보다 넓어졌을 뿐 독립 hold-out이 아니다. FP 0, 커버 100%는 이 suite에서만의 숫자다.
 - 실제 Claude Code·Anthropic provider E2E는 돌리지 않았다.
 - union은 precision을 낮춘다. 오탐도 그대로 마스킹되므로 task utility 측정이 필요하다(기말 검증기 범위).
@@ -85,28 +128,26 @@ findings ──> Native Mod: [TYPE_n]으로 값만 마스킹, 로컬 tool 실행
 ## Decision
 
 - **GO (데모 기본값):** `candidate_policy: "union"`, shell-aware v0.2.0
-- **MODIFY:** 성능 주장은 synthetic suite 범위로만, CredSweeper·Gitleaks 포함 수치로 다시 쓴다
+- **MODIFY:** 성능 주장은 synthetic suite 범위로만 쓴다. Gitleaks 포함 수치는 설치 후 다시 잰다
 - **HOLD:** precision 검증기(기말), ML adapter 통합(민준)
 - **NO-GO:** Final Guard 완화, union 오탐을 근거로 한 자동 ALLOW
 
 ## Next Step
 
-### PC에서 재측정 [PC]
+### 재측정 방법
 
-저장소 폴더에서 실행한다.
+저장소 폴더에서 아래를 실행한다. 2026-10-29 PC 결과가 위 Results다.
 
 ```powershell
-.venv\Scripts\python.exe -m unittest tests\detector\test_candidate_policy.py tests\detector\test_shell_aware.py tests\detector\test_shell_aware_regression.py
-.venv\Scripts\python.exe tests\detector\test_consensus.py
-.venv\Scripts\python.exe tests\detector\test_normalize.py
+.venv\Scripts\python.exe tests\detector\test_candidate_policy.py
+.venv\Scripts\python.exe tests\detector\test_shell_aware.py
+.venv\Scripts\python.exe tests\detector\test_shell_aware_regression.py
 .venv\Scripts\python.exe tests\detector\run_detector_tests.py
 .venv\Scripts\python.exe tests\detector\evaluate_shell_aware.py
-npm test
+npm.cmd test
 ```
 
-- `run_detector_tests.py`는 union 정책으로 fixture를 다시 잰다. 이전 `any` 정책 결과가 32/0/0이었고 shell-aware의 fixture FP가 0이었으므로 32/0/0이 기대값이다.
-- `evaluate_shell_aware.py`는 `outputs/`에 3-way union, +shell-aware, shell-aware 단독 결과와 지연을 쓴다.
-- 결과가 기대와 다르면 이 문서의 Results 표를 그 수치로 바꾼다.
+`evaluate_shell_aware.py`는 기준선 adapter(Gitleaks 포함)가 하나라도 없으면 결과를 쓴 뒤 종료 코드 2를 낸다.
 
 ### 그다음 [제안]
 

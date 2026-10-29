@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "fixture_version": 1,
+  "git_revision": "b6d8de2be15c1bc6d8dbc15d59f539d27a6091aa",
+  "active_adapters": [
+    "credsweeper",
+    "promptguard-rules",
+    "shell-aware"
+  ],
+  "skipped_adapters": [
+    {
+      "name": "gitleaks",
+      "reason": "gitleaks binary 'gitleaks' not found"
+    }
+  ],
+  "required_baseline_missing": [
+    "gitleaks"
+  ],
+  "adapter_errors": [],
+  "synthetic_only": true,
+  "raw_values_persisted": false,
+  "candidate_policy": "union",
+  "baseline_3_detector_union": {
+    "requests": 55,
+    "gold": 27,
+    "candidate_count": 9,
+    "tp_candidate_count": 7,
+    "fp": 2,
+    "fn": 20,
+    "candidate_recall": 0.259259,
+    "secret_value_exposure_recall": 0.259259,
+    "exact_span_recall": 0.259259,
+    "precision": 0.777778,
+    "f2": 0.299145,
+    "fp_per_request": 0.036364,
+    "candidates_per_request": 0.163636,
+    "partial_leak_count": 0,
+    "boundary_only_count": 0,
+    "false_positive_case_ids": [
+      "expect-sendline",
+      "function-set-password"
+    ]
+  },
+  "with_shell_aware_union": {
+    "requests": 55,
+    "gold": 27,
+    "candidate_count": 29,
+    "tp_candidate_count": 27,
+    "fp": 2,
+    "fn": 0,
+    "candidate_recall": 1.0,
+    "secret_value_exposure_recall": 1.0,
+    "exact_span_recall": 1.0,
+    "precision": 0.931034,
+    "f2": 0.985401,
+    "fp_per_request": 0.036364,
+    "candidates_per_request": 0.527273,
+    "partial_leak_count": 0,
+    "boundary_only_count": 0,
+    "false_positive_case_ids": [
+      "expect-sendline",
+      "function-set-password"
+    ]
+  },
+  "shell_aware_only": {
+    "requests": 55,
+    "gold": 27,
+    "candidate_count": 25,
+    "tp_candidate_count": 25,
+    "fp": 0,
+    "fn": 2,
+    "candidate_recall": 0.925926,
+    "secret_value_exposure_recall": 0.925926,
+    "exact_span_recall": 0.925926,
+    "precision": 1.0,
+    "f2": 0.93985,
+    "fp_per_request": 0.0,
+    "candidates_per_request": 0.454545,
+    "partial_leak_count": 0,
+    "boundary_only_count": 0,
+    "false_positive_case_ids": []
+  },
+  "shell_added_true_positive_count": 20,
+  "shell_added_true_positives": [
+    {
+      "case_id": "long-token",
+      "family": "long_option"
+    },
+    {
+      "case_id": "short-sshpass",
+      "family": "short_option"
+    },
+    {
+      "case_id": "short-mysql",
+      "family": "short_option"
+    },
+    {
+      "case_id": "short-docker",
+      "family": "short_option"
+    },
+    {
+      "case_id": "stdin-echo-sudo",
+      "family": "stdin_sink"
+    },
+    {
+      "case_id": "stdin-printf-sudo",
+      "family": "stdin_sink"
+    },
+    {
+      "case_id": "here-string",
+      "family": "here_string"
+    },
+    {
+      "case_id": "heredoc",
+      "family": "heredoc"
+    },
+    {
+      "case_id": "expect-sendline",
+      "family": "expect_send"
+    },
+    {
+      "case_id": "function-credentials",
+      "family": "function_argument"
+    },
+    {
+      "case_id": "function-login",
+      "family": "function_argument"
+    },
+    {
+      "case_id": "function-set-password",
+      "family": "function_argument"
+    },
+    {
+      "case_id": "rv-mysql-attached-quoted",
+      "family": "short_option"
+    },
+    {
+      "case_id": "rv-sudo-combined-flags",
+      "family": "stdin_sink"
+    },
+    {
+      "case_id": "rv-heredoc-cat-pipe",
+      "family": "heredoc"
+    },
+    {
+      "case_id": "rv-line-continuation",
+      "family": "short_option"
+    },
+    {
+      "case_id": "rv-pexpect-password",
+      "family": "expect_send"
+    },
+    {
+      "case_id": "rv-powershell-securestring",
+      "family": "powershell_securestring"
+    },
+    {
+      "case_id": "rv-markdown-inline",
+      "family": "short_option"
+    },
+    {
+      "case_id": "rv-heredoc-first-line-only",
+      "family": "heredoc"
+    }
+  ],
+  "old_candidate_coverage_regression_count": 0,
+  "old_candidate_coverage_regression_case_ids": [],
+  "shell_independent_secret_ratio": 0.740741
+}

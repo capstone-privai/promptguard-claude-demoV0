@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "fixture_version": 1,
+  "git_revision": "b6d8de2be15c1bc6d8dbc15d59f539d27a6091aa",
+  "active_adapters": [
+    "credsweeper",
+    "promptguard-rules",
+    "shell-aware"
+  ],
+  "skipped_adapters": [
+    {
+      "name": "gitleaks",
+      "reason": "gitleaks binary 'gitleaks' not found"
+    }
+  ],
+  "required_baseline_missing": [
+    "gitleaks"
+  ],
+  "adapter_errors": [],
+  "synthetic_only": true,
+  "raw_values_persisted": false,
+  "measurement": "warm in-process per-input; adapter scans concurrent within each union; excludes model load and HTTP/MCP",
+  "baseline_3_detector_union": {
+    "samples": 55,
+    "mean_ms": 0.5034,
+    "p50_ms": 0.4396,
+    "p95_ms": 0.7087,
+    "max_ms": 1.6196
+  },
+  "with_shell_aware_union": {
+    "samples": 55,
+    "mean_ms": 0.7698,
+    "p50_ms": 0.6541,
+    "p95_ms": 1.1157,
+    "max_ms": 3.782
+  },
+  "shell_aware_only": {
+    "samples": 55,
+    "mean_ms": 0.087,
+    "p50_ms": 0.0832,
+    "p95_ms": 0.1469,
+    "max_ms": 0.1894
+  },
+  "paired_delta_ms": {
+    "samples": 55,
+    "mean_ms": 0.2664,
+    "p50_ms": 0.1949,
+    "p95_ms": 0.4427,
+    "max_ms": 3.1264
+  },
+  "p50_union_difference_ms": 0.2145,
+  "p95_union_difference_ms": 0.407,
+  "interpretation": "Union adapters run concurrently. When shell-aware latency is below the existing critical path, the union difference is dominated by Gitleaks process startup and scheduling noise."
+}
