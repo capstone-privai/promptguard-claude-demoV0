@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "fixture_version": 1,
+  "git_revision": "928c84ce71646d629c3ab6e5c261317af1347dcb",
+  "active_adapters": [
+    "credsweeper",
+    "gitleaks",
+    "promptguard-rules",
+    "ml-detector",
+    "shell-aware"
+  ],
+  "skipped_adapters": [],
+  "required_old_four_missing": [],
+  "adapter_errors": [],
+  "synthetic_only": true,
+  "raw_values_persisted": false,
+  "metrics": {
+    "requests": 29,
+    "gold": 16,
+    "candidate_count": 14,
+    "tp_candidate_count": 14,
+    "fp": 0,
+    "fn": 2,
+    "candidate_recall": 0.875,
+    "secret_value_exposure_recall": 0.875,
+    "exact_span_recall": 0.875,
+    "precision": 1.0,
+    "f2": 0.897436,
+    "fp_per_request": 0.0,
+    "candidates_per_request": 0.482759,
+    "partial_leak_count": 0,
+    "boundary_only_count": 0,
+    "false_positive_case_ids": []
+  },
+  "added_true_positive_count": 9,
+  "added_case_ids": [
+    "long-token",
+    "short-mysql",
+    "short-docker",
+    "stdin-echo-sudo",
+    "stdin-printf-sudo",
+    "here-string",
+    "heredoc",
+    "expect-sendline",
+    "function-login"
+  ]
+}

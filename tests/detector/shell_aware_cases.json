@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "description": "Synthetic shell-aware candidate evaluation; no production credentials.",
+  "cases": [
+    {"id":"known-password","text":"password = \"KnownSyntheticPass_01X\"","gold":[{"value":"KnownSyntheticPass_01X","family":"known_assignment"}]},
+    {"id":"known-api-key","text":"api_key = \"SyntheticApiKey_02XABCDEF\"","gold":[{"value":"SyntheticApiKey_02XABCDEF","family":"known_assignment"}]},
+    {"id":"long-password","text":"somecmd --password 'LongSyntheticPass_03X'","gold":[{"value":"LongSyntheticPass_03X","family":"long_option"}]},
+    {"id":"long-token","text":"somecmd --token LongSyntheticToken_04X","gold":[{"value":"LongSyntheticToken_04X","family":"long_option"}]},
+    {"id":"long-client-secret","text":"somecmd --client-secret=LongClientSecret_05X","gold":[{"value":"LongClientSecret_05X","family":"long_option"}]},
+    {"id":"short-sshpass","text":"sshpass -p 'ShortSshPass_06X' ssh demo@host.invalid","gold":[{"value":"ShortSshPass_06X","family":"short_option"}]},
+    {"id":"short-mysql","text":"mysql -udemo -p'ShortMysqlPass_07X' demo","gold":[{"value":"ShortMysqlPass_07X","family":"short_option"}]},
+    {"id":"short-docker","text":"docker login -u demo -p 'ShortDockerPass_08X' registry.invalid","gold":[{"value":"ShortDockerPass_08X","family":"short_option"}]},
+    {"id":"stdin-echo-sudo","text":"echo 'StdinEchoPass_09X' | sudo -S whoami","gold":[{"value":"StdinEchoPass_09X","family":"stdin_sink"}]},
+    {"id":"stdin-printf-sudo","text":"printf '%s\\n' 'StdinPrintfPass_10X' | sudo -S whoami","gold":[{"value":"StdinPrintfPass_10X","family":"stdin_sink"}]},
+    {"id":"here-string","text":"sudo -S <<< 'HereStringPass_11X'","gold":[{"value":"HereStringPass_11X","family":"here_string"}]},
+    {"id":"heredoc","text":"sudo -S sh <<'PGEOF'\nHereDocPass_12X\nPGEOF","gold":[{"value":"HereDocPass_12X","family":"heredoc"}]},
+    {"id":"expect-sendline","text":"expect('Password:'); child.sendline('ExpectPass_13X')","gold":[{"value":"ExpectPass_13X","family":"expect_send"}]},
+    {"id":"function-credentials","text":"test_credentials('root', 'FunctionCredPass_14X')","gold":[{"value":"FunctionCredPass_14X","family":"function_argument"}]},
+    {"id":"function-login","text":"login('admin', 'FunctionLoginPass_15X')","gold":[{"value":"FunctionLoginPass_15X","family":"function_argument"}]},
+    {"id":"function-set-password","text":"set_password(user, 'FunctionSetPass_16X')","gold":[{"value":"FunctionSetPass_16X","family":"function_argument"}]},
+
+    {"id":"neg-mkdir-p","text":"mkdir -p build","gold":[]},
+    {"id":"neg-ssh-port","text":"ssh -p 2222 localhost","gold":[]},
+    {"id":"neg-docker-port","text":"docker run -p 8080:80 nginx","gold":[]},
+    {"id":"neg-pytest-plugin","text":"pytest -p plugin_name","gold":[]},
+    {"id":"neg-cp-preserve","text":"cp -p source target","gold":[]},
+    {"id":"neg-uuid","text":"fixture_id=550e8400-e29b-41d4-a716-446655440000","gold":[]},
+    {"id":"neg-request-id","text":"request_id=req_01HZ123456789ABCDEFGHJKMNPQ","gold":[]},
+    {"id":"neg-trace-id","text":"trace_id=4bf92f3577b34da6a3ce929d0e0e4736","gold":[]},
+    {"id":"neg-commit","text":"commit_sha=0123456789abcdef0123456789abcdef01234567","gold":[]},
+    {"id":"neg-digest","text":"image_digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","gold":[]},
+    {"id":"neg-session","text":"session_id=session_0123456789abcdef","gold":[]},
+    {"id":"neg-random","text":"artifact_ref=Q7M9K2V4N8R6T3W5Y1Z0","gold":[]},
+    {"id":"neg-send","text":"child.sendline('hello world')","gold":[]}
+  ]
+}

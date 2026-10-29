@@ -44,10 +44,10 @@ def score(gt, pr):
     f2 = 5 * precision * recall / (4 * precision + recall) if precision + recall else 0
     return {"tp": tp, "fp": fp, "fn": fn, "precision": precision, "recall": recall, "f1": f1, "f2": f2}
 
-def predictions(detector, cases, ballots_of, required_votes=None):
+def predictions(detector, cases, ballots_of, required_votes=None, *, candidate_scope=False):
     predicted = set()
     for name, text, ballots in cases:
-        findings, _ = detector.decide(text, "fixture", ballots_of(ballots), required_votes)
+        findings, _ = detector.decide(text, "fixture", ballots_of(ballots), required_votes, candidate_scope=candidate_scope)
         predicted |= {(name, r["type"], r["start"], r["end"]) for r in findings}
     return predicted
 
@@ -73,16 +73,19 @@ def main():
     gt = set(ground_truth)
     pr = predictions(detector, scored, lambda ballots: ballots)
     metrics = score(gt, pr)
-    voters = len(detector.adapters)
+    voters = len(detector.protection_names)
     policy_comparison = [{"required_votes": k, "label": "any" if k == 1 else "unanimous" if k == voters else f"at_least:{k}", **score(gt, predictions(detector, scored, lambda ballots: ballots, k))} for k in range(1, voters + 1)]
-    per_adapter = {adapter.name: score(gt, predictions(detector, scored, lambda ballots, name=adapter.name: {name: ballots[name]}, 1)) for adapter in detector.adapters}
-    output = {**detector.describe(), "offset_unit": "utf16_code_units", **metrics, "adapter_errors": adapter_errors, "policy_comparison": policy_comparison, "per_adapter": per_adapter, "false_positives": [{"file": f, "type": t, "start": s, "end": e} for f, t, s, e in sorted(pr - gt)], "false_negatives": [{"file": f, "type": t, "start": s, "end": e} for f, t, s, e in sorted(gt - pr)], "per_file": per_file, "ground_truth": [{"file": f, "expected_type": t, "expected_start": s, "expected_end": e} for f, t, s, e in ground_truth]}
+    per_adapter = {adapter.name: score(gt, predictions(detector, scored, lambda ballots, name=adapter.name: {name: ballots[name]}, 1, candidate_scope=True)) for adapter in detector.adapters}
+    union_pr = predictions(detector, scored, lambda ballots: ballots, 1, candidate_scope=True)
+    union_metrics = score(gt, union_pr)
+    output = {**detector.describe(), "offset_unit": "utf16_code_units", **metrics, "candidate_union": union_metrics, "adapter_errors": adapter_errors, "policy_comparison": policy_comparison, "per_adapter": per_adapter, "false_positives": [{"file": f, "type": t, "start": s, "end": e} for f, t, s, e in sorted(pr - gt)], "false_negatives": [{"file": f, "type": t, "start": s, "end": e} for f, t, s, e in sorted(gt - pr)], "candidate_union_false_positives": [{"file": f, "type": t, "start": s, "end": e} for f, t, s, e in sorted(union_pr - gt)], "candidate_union_false_negatives": [{"file": f, "type": t, "start": s, "end": e} for f, t, s, e in sorted(gt - union_pr)], "per_file": per_file, "ground_truth": [{"file": f, "expected_type": t, "expected_start": s, "expected_end": e} for f, t, s, e in ground_truth]}
     (ROOT / "outputs" / "detector-metrics.json").write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"consensus": output["consensus"], **metrics, "adapter_errors": adapter_errors}))
     for row in policy_comparison:
         print(f"  policy {row['label']:<12} tp={row['tp']:>2} fp={row['fp']:>2} fn={row['fn']:>2} f2={row['f2']:.3f}")
     for name, row in per_adapter.items():
         print(f"  adapter {name:<18} tp={row['tp']:>2} fp={row['fp']:>2} fn={row['fn']:>2} f2={row['f2']:.3f}")
+    print(f"  candidate union      tp={union_metrics['tp']:>2} fp={union_metrics['fp']:>2} fn={union_metrics['fn']:>2} f2={union_metrics['f2']:.3f}")
     raise SystemExit(0 if metrics["fp"] == 0 and metrics["fn"] == 0 and not adapter_errors else 1)
 
 if __name__ == "__main__":

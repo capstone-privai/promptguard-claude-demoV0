@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "fixture_version": 1,
+  "git_revision": "928c84ce71646d629c3ab6e5c261317af1347dcb",
+  "active_adapters": [
+    "credsweeper",
+    "gitleaks",
+    "promptguard-rules",
+    "ml-detector",
+    "shell-aware"
+  ],
+  "skipped_adapters": [],
+  "required_old_four_missing": [],
+  "adapter_errors": [],
+  "synthetic_only": true,
+  "raw_values_persisted": false,
+  "measurement": "warm in-process per-input; adapter scans concurrent within each union; excludes model load and HTTP/MCP",
+  "baseline_4_detector_union": {
+    "samples": 29,
+    "mean_ms": 360.7832,
+    "p50_ms": 338.2736,
+    "p95_ms": 446.4941,
+    "max_ms": 466.7783
+  },
+  "new_5_detector_union": {
+    "samples": 29,
+    "mean_ms": 365.6796,
+    "p50_ms": 345.9887,
+    "p95_ms": 455.5113,
+    "max_ms": 473.4224
+  },
+  "shell_aware_only": {
+    "samples": 29,
+    "mean_ms": 0.0817,
+    "p50_ms": 0.0776,
+    "p95_ms": 0.1231,
+    "max_ms": 0.1592
+  },
+  "paired_delta_ms": {
+    "samples": 29,
+    "mean_ms": 4.8964,
+    "p50_ms": 7.7151,
+    "p95_ms": 117.6309,
+    "max_ms": 160.051
+  },
+  "p50_union_difference_ms": 7.7151,
+  "p95_union_difference_ms": 9.0172,
+  "interpretation": "Union adapters run concurrently. Difference is dominated by ML/process noise when shell-aware latency is below the existing critical path."
+}

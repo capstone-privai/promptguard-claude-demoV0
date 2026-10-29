@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "fixture_version": 1,
+  "git_revision": "928c84ce71646d629c3ab6e5c261317af1347dcb",
+  "active_adapters": [
+    "credsweeper",
+    "gitleaks",
+    "promptguard-rules",
+    "ml-detector",
+    "shell-aware"
+  ],
+  "skipped_adapters": [],
+  "required_old_four_missing": [],
+  "adapter_errors": [],
+  "synthetic_only": true,
+  "raw_values_persisted": false,
+  "baseline_4_detector_union": {
+    "requests": 29,
+    "gold": 16,
+    "candidate_count": 10,
+    "tp_candidate_count": 7,
+    "fp": 3,
+    "fn": 9,
+    "candidate_recall": 0.4375,
+    "secret_value_exposure_recall": 0.4375,
+    "exact_span_recall": 0.4375,
+    "precision": 0.7,
+    "f2": 0.472973,
+    "fp_per_request": 0.103448,
+    "candidates_per_request": 0.344828,
+    "partial_leak_count": 0,
+    "boundary_only_count": 0,
+    "false_positive_case_ids": [
+      "expect-sendline",
+      "function-set-password",
+      "heredoc"
+    ]
+  },
+  "new_5_detector_union": {
+    "requests": 29,
+    "gold": 16,
+    "candidate_count": 19,
+    "tp_candidate_count": 16,
+    "fp": 3,
+    "fn": 0,
+    "candidate_recall": 1.0,
+    "secret_value_exposure_recall": 1.0,
+    "exact_span_recall": 1.0,
+    "precision": 0.842105,
+    "f2": 0.963855,
+    "fp_per_request": 0.103448,
+    "candidates_per_request": 0.655172,
+    "partial_leak_count": 0,
+    "boundary_only_count": 0,
+    "false_positive_case_ids": [
+      "expect-sendline",
+      "function-set-password",
+      "heredoc"
+    ]
+  },
+  "shell_aware_only": {
+    "requests": 29,
+    "gold": 16,
+    "candidate_count": 14,
+    "tp_candidate_count": 14,
+    "fp": 0,
+    "fn": 2,
+    "candidate_recall": 0.875,
+    "secret_value_exposure_recall": 0.875,
+    "exact_span_recall": 0.875,
+    "precision": 1.0,
+    "f2": 0.897436,
+    "fp_per_request": 0.0,
+    "candidates_per_request": 0.482759,
+    "partial_leak_count": 0,
+    "boundary_only_count": 0,
+    "false_positive_case_ids": []
+  },
+  "shell_added_true_positive_count": 9,
+  "shell_added_true_positives": [
+    {
+      "case_id": "long-token",
+      "family": "long_option"
+    },
+    {
+      "case_id": "short-mysql",
+      "family": "short_option"
+    },
+    {
+      "case_id": "short-docker",
+      "family": "short_option"
+    },
+    {
+      "case_id": "stdin-echo-sudo",
+      "family": "stdin_sink"
+    },
+    {
+      "case_id": "stdin-printf-sudo",
+      "family": "stdin_sink"
+    },
+    {
+      "case_id": "here-string",
+      "family": "here_string"
+    },
+    {
+      "case_id": "heredoc",
+      "family": "heredoc"
+    },
+    {
+      "case_id": "expect-sendline",
+      "family": "expect_send"
+    },
+    {
+      "case_id": "function-login",
+      "family": "function_argument"
+    }
+  ],
+  "old_candidate_coverage_regression_count": 0,
+  "old_candidate_coverage_regression_case_ids": [],
+  "ml_shell_overlap_rate_on_shell_tp": 0.357143,
+  "shell_independent_secret_ratio": 0.5625
+}

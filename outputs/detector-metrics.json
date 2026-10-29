@@ -14,10 +14,34 @@
     {
       "name": "promptguard-rules",
       "version": "0.1.0"
+    },
+    {
+      "name": "ml-detector",
+      "version": "ml-span-bundle-v1:abc32620dd4f"
+    },
+    {
+      "name": "shell-aware",
+      "version": "0.1.0"
     }
   ],
+  "protection_adapters": [
+    "credsweeper",
+    "gitleaks",
+    "promptguard-rules"
+  ],
+  "candidate_adapters": [
+    "credsweeper",
+    "gitleaks",
+    "promptguard-rules",
+    "ml-detector",
+    "shell-aware"
+  ],
+  "candidate_only_adapters": [
+    "ml-detector",
+    "shell-aware"
+  ],
   "skipped": [],
-  "ml": false,
+  "ml": true,
   "offset_unit": "utf16_code_units",
   "tp": 32,
   "fp": 0,
@@ -26,6 +50,15 @@
   "recall": 1.0,
   "f1": 1.0,
   "f2": 1.0,
+  "candidate_union": {
+    "tp": 32,
+    "fp": 3,
+    "fn": 0,
+    "precision": 0.9142857142857143,
+    "recall": 1.0,
+    "f1": 0.955223880597015,
+    "f2": 0.98159509202454
+  },
   "adapter_errors": [],
   "policy_comparison": [
     {
@@ -89,10 +122,49 @@
       "recall": 1.0,
       "f1": 1.0,
       "f2": 1.0
+    },
+    "ml-detector": {
+      "tp": 1,
+      "fp": 24,
+      "fn": 31,
+      "precision": 0.04,
+      "recall": 0.03125,
+      "f1": 0.03508771929824561,
+      "f2": 0.032679738562091505
+    },
+    "shell-aware": {
+      "tp": 0,
+      "fp": 0,
+      "fn": 32,
+      "precision": 0,
+      "recall": 0.0,
+      "f1": 0,
+      "f2": 0
     }
   },
   "false_positives": [],
   "false_negatives": [],
+  "candidate_union_false_positives": [
+    {
+      "file": "app.log",
+      "type": "SECRET",
+      "start": 123,
+      "end": 127
+    },
+    {
+      "file": "benign.env",
+      "type": "SECRET",
+      "start": 22,
+      "end": 26
+    },
+    {
+      "file": "benign.env",
+      "type": "SECRET",
+      "start": 164,
+      "end": 196
+    }
+  ],
+  "candidate_union_false_negatives": [],
   "per_file": [
     {
       "file": ".env",
@@ -102,7 +174,9 @@
       "votes": {
         "credsweeper": 3,
         "gitleaks": 0,
-        "promptguard-rules": 3
+        "promptguard-rules": 3,
+        "ml-detector": 3,
+        "shell-aware": 0
       }
     },
     {
@@ -113,7 +187,9 @@
       "votes": {
         "credsweeper": 4,
         "gitleaks": 0,
-        "promptguard-rules": 4
+        "promptguard-rules": 4,
+        "ml-detector": 1,
+        "shell-aware": 0
       }
     },
     {
@@ -124,7 +200,9 @@
       "votes": {
         "credsweeper": 9,
         "gitleaks": 3,
-        "promptguard-rules": 6
+        "promptguard-rules": 6,
+        "ml-detector": 5,
+        "shell-aware": 0
       }
     },
     {
@@ -135,7 +213,9 @@
       "votes": {
         "credsweeper": 2,
         "gitleaks": 0,
-        "promptguard-rules": 2
+        "promptguard-rules": 2,
+        "ml-detector": 2,
+        "shell-aware": 0
       }
     },
     {
@@ -146,7 +226,9 @@
       "votes": {
         "credsweeper": 2,
         "gitleaks": 0,
-        "promptguard-rules": 2
+        "promptguard-rules": 2,
+        "ml-detector": 2,
+        "shell-aware": 0
       }
     },
     {
@@ -157,7 +239,9 @@
       "votes": {
         "credsweeper": 3,
         "gitleaks": 0,
-        "promptguard-rules": 2
+        "promptguard-rules": 2,
+        "ml-detector": 3,
+        "shell-aware": 0
       }
     },
     {
@@ -168,7 +252,9 @@
       "votes": {
         "credsweeper": 2,
         "gitleaks": 0,
-        "promptguard-rules": 2
+        "promptguard-rules": 2,
+        "ml-detector": 2,
+        "shell-aware": 0
       }
     },
     {
@@ -179,7 +265,9 @@
       "votes": {
         "credsweeper": 3,
         "gitleaks": 0,
-        "promptguard-rules": 3
+        "promptguard-rules": 3,
+        "ml-detector": 3,
+        "shell-aware": 0
       }
     },
     {
@@ -190,7 +278,9 @@
       "votes": {
         "credsweeper": 4,
         "gitleaks": 1,
-        "promptguard-rules": 4
+        "promptguard-rules": 4,
+        "ml-detector": 2,
+        "shell-aware": 0
       }
     },
     {
@@ -201,7 +291,9 @@
       "votes": {
         "credsweeper": 4,
         "gitleaks": 4,
-        "promptguard-rules": 4
+        "promptguard-rules": 4,
+        "ml-detector": 0,
+        "shell-aware": 0
       }
     },
     {
@@ -212,7 +304,9 @@
       "votes": {
         "credsweeper": 0,
         "gitleaks": 0,
-        "promptguard-rules": 0
+        "promptguard-rules": 0,
+        "ml-detector": 2,
+        "shell-aware": 0
       }
     }
   ],
