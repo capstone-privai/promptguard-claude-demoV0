@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from ..adapter import AdapterUnavailable, DetectorAdapter, RawFinding
+from .shell_aware import PROSE_WORDS
 
 DEFAULT_REPOSITORY = "../../../promptguard-model"
 # Words that suggest a credential is nearby. Used only when an adapter sets
@@ -72,6 +73,9 @@ class _ModelRepoAdapter(DetectorAdapter):
         timeout = options.get("timeout_seconds")
         self.timeout = float(timeout) if timeout is not None else None
         self.strong_threshold = float(options.get("strong_threshold", 0.99))
+        # A model span shorter than this, or one that is an ordinary English word ("of", "by": ml-v9 flagged both
+        # in a live demo session), is not a credential value and is dropped before it can mask anything.
+        self.min_value_length = max(1, int(options.get("min_value_length", 6)))
         # One model instance is not safe to share across the worker's request
         # threads; a single executor thread serializes calls and lets a timeout
         # return control while the model call finishes in the background.
@@ -95,12 +99,18 @@ class _ModelRepoAdapter(DetectorAdapter):
         for start, end, score in spans:
             if not (0 <= start < end <= len(text)):
                 raise RuntimeError(f"{self.name} returned an invalid span")
+            if not self._plausible(text[start:end]):
+                continue
             findings.append(RawFinding(
                 start, end, "SECRET", f"{self.family}-span",
                 "strong" if score >= self.strong_threshold else "ambiguous",
                 self.family, {"model": self.model_id}, round(float(score), 6),
             ))
         return findings
+
+    def _plausible(self, value: str) -> bool:
+        word = value.strip().strip("\"'`.,;:()[]{}")
+        return len(word) >= self.min_value_length and word.lower() not in PROSE_WORDS
 
     def _spans(self, text: str) -> list[tuple[int, int, float]]:  # pragma: no cover - abstract
         raise NotImplementedError

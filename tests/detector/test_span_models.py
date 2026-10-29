@@ -121,6 +121,15 @@ class SpanModelTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             adapter.scan(f"key {SECRET}")
 
+    def test_short_and_plain_word_spans_are_dropped(self) -> None:
+        # ml-v9 flagged "of" and "by" in a live demo session.
+        text = f"the token of the account is set by {SECRET} today"
+        rows = self.v9(spans=[("of", 0.9999), ("by", 0.9999), ("today", 0.99), (SECRET, 0.9999)]).scan(text)
+        self.assertEqual([text[r.start:r.end] for r in rows], [SECRET])
+        loose = MLV9Adapter("ml-v9", {**self.options, "min_value_length": 2}, ROOT,
+                            factory=lambda c, device: FakeV9(c, device, spans=[("ok", 0.99), ("of", 0.99)]))
+        self.assertEqual([text2[r.start:r.end] for text2 in ["ok of"] for r in loose.scan(text2)], ["ok"])
+
     # Qwen
     def test_qwen_error_status_fails_closed(self) -> None:
         for error in ("invalid_json", "truncated", "inference_failed"):
