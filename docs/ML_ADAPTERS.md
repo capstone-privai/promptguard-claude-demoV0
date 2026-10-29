@@ -5,9 +5,13 @@
 | 모듈 | 감싸는 함수 | 모델 폴더 | 속도 (민준 측정, CPU 4스레드) |
 |---|---|---|---|
 | `ml-v9` | `privai_model.ml_span.runtime.MLSpanDetector.scan_text` | `models/span-detector-v9` (약 560MB) | 입력당 평균 33ms |
-| `ml-qwen` | `privai_model.qwen_span.wrapper.QwenSecretScanner.scan` | `models/qwen-span-v2` (LoRA 35MB + 베이스 Qwen2.5-Coder-0.5B) | 입력당 평균 약 1.4초 |
+| `ml-qwen` | `privai_model.qwen_span.wrapper.QwenSecretScanner.scan` | `models/qwen-span-v3` (LoRA + 베이스 Qwen2.5-Coder-0.5B) | 입력당 평균 약 1.0초 (v3, 민준 측정) |
 
 두 모듈 모두 `candidate_only: true`라 `majority` 정책에서는 투표하지 않는다. `union` 정책(기본)에서는 하나만 잡아도 마스킹된다.
+
+## Qwen v3 (2026-10-30부터 기본)
+
+민준이 2026-10-29 `promptguard-model` main(18cd162)에 올린 `qwen-span-v3`를 기본으로 쓴다. 함수 형태(`QwenSecretScanner.scan` → `ScanResult`)는 v2와 같아 adapter 코드는 그대로이고 모델 폴더만 바뀐다. 민준 보고: 학습에서 뺀 참조형 문법 hold-out의 hard negative 78행 중 오탐 0행(v2 38행), validation F2 .884(v2 .893), 합성 데이터만 학습, `production_ready: false`. 이 수치는 민준 측정이며 데모 저장소에서 다시 재지 않았다.
 
 ## 준비
 
@@ -40,11 +44,12 @@ cd sample-protected-project
 | 옵션 | 모듈 | 기본값 | 뜻 |
 |---|---|---|---|
 | `repository` | 둘 다 | `../../../promptguard-model` | 민준 저장소 경로 |
-| `checkpoint` / `bundle` | v9 / Qwen | `models/span-detector-v9` / `models/qwen-span-v2` | 모델 폴더 (저장소 기준) |
+| `checkpoint` / `bundle` | v9 / Qwen | `models/span-detector-v9` / `models/qwen-span-v3` | 모델 폴더 (저장소 기준). v2로 되돌리려면 `models/qwen-span-v2` |
 | `device` | 둘 다 | `cpu` / `auto` | `cpu`, `mps`, `cuda`, `auto` |
 | `threshold` | 둘 다 | 모델 번들의 값 | 점수 cutoff. 비우면 민준이 validation에서 고정한 값 |
 | `gate` | 둘 다 | `always` / `cue` | `cue`면 password, token, 비밀번호 같은 단어가 **단어 단위로** 있는 텍스트만 모델에 보낸다("tests passed"는 해당 없음) |
 | `timeout_seconds` | 둘 다 | 4 / 25 | 넘기면 오류로 처리해 요청을 막는다 |
+| `min_value_length` | 둘 다 | 6 | 모델이 찍은 스팬이 이보다 짧거나 평범한 영어 단어(of, by, option 등)면 버린다. 2026-10-30 시연 중 ml-v9가 "of", "by"를 비밀로 찍은 오탐 때문에 넣었다. 6자 미만 비밀번호는 모델로는 가리지 않는다(다른 모듈은 여전히 검사) |
 | `max_chunks`, `overlap_lines` | Qwen | 8, 1 | 입력 한도(4,096 토큰)를 넘는 텍스트를 줄 단위로 나누는 방식 |
 
 ## 동작 원칙

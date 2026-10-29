@@ -6,7 +6,7 @@ PG_DETECTOR_ENABLE / PG_DETECTOR_DISABLE):
 - ``ml-v9``   wraps ``privai_model.ml_span.runtime.MLSpanDetector`` (mmBERT token
   classification, models/span-detector-v9).
 - ``ml-qwen`` wraps ``privai_model.qwen_span.wrapper.QwenSecretScanner``
-  (Qwen2.5-Coder LoRA, models/qwen-span-v2).
+  (Qwen2.5-Coder LoRA, models/qwen-span-v3).
 
 Both only call the model repository's public entry points, so a new model
 version is picked up with ``git pull`` in that repository and a PromptGuard
@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from ..adapter import AdapterUnavailable, DetectorAdapter, RawFinding
+from .shell_aware import PROSE_WORDS
 
 DEFAULT_REPOSITORY = "../../../promptguard-model"
 # Words that suggest a credential is nearby. Used only when an adapter sets
@@ -72,6 +73,9 @@ class _ModelRepoAdapter(DetectorAdapter):
         timeout = options.get("timeout_seconds")
         self.timeout = float(timeout) if timeout is not None else None
         self.strong_threshold = float(options.get("strong_threshold", 0.99))
+        # A model span shorter than this, or one that is an ordinary English word ("of", "by": ml-v9 flagged both
+        # in a live demo session), is not a credential value and is dropped before it can mask anything.
+        self.min_value_length = max(1, int(options.get("min_value_length", 6)))
         # One model instance is not safe to share across the worker's request
         # threads; a single executor thread serializes calls and lets a timeout
         # return control while the model call finishes in the background.
@@ -95,12 +99,18 @@ class _ModelRepoAdapter(DetectorAdapter):
         for start, end, score in spans:
             if not (0 <= start < end <= len(text)):
                 raise RuntimeError(f"{self.name} returned an invalid span")
+            if not self._plausible(text[start:end]):
+                continue
             findings.append(RawFinding(
                 start, end, "SECRET", f"{self.family}-span",
                 "strong" if score >= self.strong_threshold else "ambiguous",
                 self.family, {"model": self.model_id}, round(float(score), 6),
             ))
         return findings
+
+    def _plausible(self, value: str) -> bool:
+        word = value.strip().strip("\"'`.,;:()[]{}")
+        return len(word) >= self.min_value_length and word.lower() not in PROSE_WORDS
 
     def _spans(self, text: str) -> list[tuple[int, int, float]]:  # pragma: no cover - abstract
         raise NotImplementedError
@@ -136,7 +146,7 @@ class MLV9Adapter(_ModelRepoAdapter):
 
 
 class QwenAdapter(_ModelRepoAdapter):
-    """Qwen2.5-Coder LoRA span detector (models/qwen-span-v2) via QwenSecretScanner.
+    """Qwen2.5-Coder LoRA span detector (models/qwen-span-v3) via QwenSecretScanner.
 
     The scanner refuses inputs over its token limit, so long text is split on
     line boundaries into chunks that fit, with ``overlap_lines`` lines repeated
@@ -148,7 +158,7 @@ class QwenAdapter(_ModelRepoAdapter):
 
     def __init__(self, name: str, options: Mapping[str, Any], config_dir: Path, *, factory: Callable[..., Any] | None = None) -> None:
         super().__init__(name, options, config_dir)
-        bundle = _resolve(self.repository, options.get("bundle"), "models/qwen-span-v2")
+        bundle = _resolve(self.repository, options.get("bundle"), "models/qwen-span-v3")
         if factory is None:
             if not _real_weights(bundle / "adapter_model.safetensors"):
                 raise AdapterUnavailable("Qwen adapter weights missing (run git lfs pull in the model repository)")
@@ -166,7 +176,7 @@ class QwenAdapter(_ModelRepoAdapter):
         self.max_chunks = max(1, int(options.get("max_chunks", 8)))
         self.overlap_lines = max(0, int(options.get("overlap_lines", 1)))
         self.limit = int(getattr(self.model, "max_input_tokens", 4096))
-        self.model_id = _bundle_id(bundle / "qwen_bundle.json", "qwen-span-v2")
+        self.model_id = _bundle_id(bundle / "qwen_bundle.json", "qwen-span-v3")
         self.version = self.model_id
 
     def _fits(self, text: str) -> bool:

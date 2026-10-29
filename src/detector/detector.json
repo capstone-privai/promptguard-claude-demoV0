@@ -62,7 +62,7 @@
       "candidate_only": true,
       "options": {
         "repository": "../../../promptguard-model",
-        "bundle": "models/qwen-span-v2",
+        "bundle": "models/qwen-span-v3",
         "device": "auto",
         "gate": "cue",
         "timeout_seconds": 25,
