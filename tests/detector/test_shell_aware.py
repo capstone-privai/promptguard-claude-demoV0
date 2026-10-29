@@ -66,7 +66,7 @@ class ShellAwareTests(unittest.TestCase):
         samples = [
             ("echo 'SyntheticPass_123' | sudo -S whoami", "SyntheticPass_123", "stdin_sink"),
             ("printf '%s\\n' 'SyntheticPass_123' | sudo -S whoami", "SyntheticPass_123", "stdin_sink"),
-            ('echo "$TOKEN" | docker login --username demo --password-stdin registry.invalid', "$TOKEN", "stdin_sink"),
+            ("echo 'SyntheticDockerPass_456' | docker login --username demo --password-stdin registry.invalid", "SyntheticDockerPass_456", "stdin_sink"),
             ("sudo -S <<< 'SyntheticPass_123'", "SyntheticPass_123", "here_string"),
             ("sudo -S sh <<'PGEOF'\nSyntheticPass_123\nPGEOF", "SyntheticPass_123", "heredoc"),
         ]
