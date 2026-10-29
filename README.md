@@ -7,7 +7,7 @@ Claude Code 2.1.291 Native Mod와 여러 detector 모듈(CredSweeper 1.19.0, Git
 ## 준비물
 
 - Windows PowerShell 5.1 이상 또는 macOS의 Bash
-- Python 3.12 (PATH 등록). 설치 스크립트는 3.12를 찾고, `promptguard run`은 3.14로 만든 `.venv`도 사용할 수 있습니다.
+- Python 3.12 또는 3.14 (PATH 등록). Windows 설치 스크립트(`install.ps1`)는 3.12와 3.14를 모두 찾고, macOS `install.sh`는 3.12를 찾습니다. `promptguard run`은 둘 중 어느 버전으로 만든 `.venv`도 사용합니다.
 - Node.js LTS
 - macOS: Xcode Command Line Tools (`xcode-select --install`)
 - Claude Code 2.1.291 (기본 설정은 이 버전만 허용합니다. 다른 버전은 아래 [버전 고정](#claude-code-버전-고정) 참고)
@@ -33,7 +33,7 @@ cd promptguard-claude-demoV0
 ```
 
 설치 시 repository-local `.venv`에 `credsweeper==1.19.0`을 고정 설치합니다.
-`py -3.12` 또는 PATH의 `python`을 자동 탐색합니다. 별도 Python 경로를 써야 한다면 `PROMPTGUARD_PYTHON` 환경 변수에 `python.exe` 경로를 지정할 수 있습니다.
+`py -3.12`, `py -3.14` 또는 PATH의 `python`을 자동 탐색합니다. 별도 Python 경로를 써야 한다면 `PROMPTGUARD_PYTHON` 환경 변수에 `python.exe` 경로를 지정할 수 있습니다.
 
 ### macOS
 
@@ -184,7 +184,7 @@ detector는 여러 모듈을 **adapter**로 감싸 같은 인터페이스(`name`
   - `"majority"`: 기존 CredSweeper/Gitleaks/custom rules 다수결만 사용합니다. `candidate_only` 모듈은 투표하지 않습니다. 이전 동작과 같아서 비교나 롤백에 씁니다.
 - `candidates`: 정책과 상관없이 모든 모듈의 합집합. 겹치는 span은 하나로 합치고, 어느 모듈이 왜 잡았는지(provenance)를 raw 값 없이 남깁니다.
 
-`PG_DETECTOR_CANDIDATE_POLICY=majority`로 실행하면 설정 파일을 고치지 않고 기존 동작으로 돌아갑니다. 팀 ML 모듈은 `PG_DETECTOR_ENABLE=ml-v9` 처럼 켭니다. 준비와 옵션은 [ML adapter 문서](docs/ML_ADAPTERS.md)를 참고하세요.
+`PG_DETECTOR_CANDIDATE_POLICY=majority`로 실행하면 설정 파일을 고치지 않고 기존 동작으로 돌아갑니다. 탐지기는 `promptguard run --enable ml-v9 --disable shell-aware --policy union`처럼 실행 옵션으로 켜고 끕니다(`promptguard --help`). 준비와 옵션은 [ML adapter 문서](docs/ML_ADAPTERS.md)를 참고하세요.
 
 | adapter 이름 | 종류 | 구현 |
 | --- | --- | --- |

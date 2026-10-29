@@ -5,13 +5,16 @@ const path = require('path')
 const { loadConfig, resolvePython } = require('../supervisor/config.cjs')
 const { getJson } = require('../supervisor/http.cjs')
 const { RuntimeSupervisor } = require('../supervisor/runtime.cjs')
+const { detectorEnvironment } = require('./detector-options.cjs')
 const { pidIsAlive, readState, sanitizeGuardStatus } = require('../supervisor/state.cjs')
 
 function usage() {
   console.log(`PromptGuard Runtime V1
 
 Usage:
-  promptguard run [--config FILE] [--runtime-dir DIR] [--no-claude] [-- CLAUDE_ARGS...]
+  promptguard run [--config FILE] [--runtime-dir DIR] [--no-claude]
+                  [--enable NAMES] [--disable NAMES] [--policy union|majority]
+                  [--detector-timeout-ms N] [--readiness-timeout-ms N] [-- CLAUDE_ARGS...]
   promptguard status [--config FILE] [--runtime-dir DIR] [--json]
   promptguard version
 
@@ -24,6 +27,22 @@ Options:
   --config       Use a specific strict PromptGuard JSON config.
   --runtime-dir  Store runtime metadata in a specific directory.
   --json         Emit machine-readable status output.
+
+Detector options (run):
+  --enable NAMES             Turn detectors on, comma-separated (e.g. ml-v9,ml-qwen).
+  --disable NAMES            Turn detectors off; wins over --enable.
+  --policy union|majority    union: any detector's span is masked (default in detector.json).
+                             majority: the original vote of the non-candidate-only detectors.
+  --detector-timeout-ms N    How long Native Mod and Final Guard wait for a scan.
+  --readiness-timeout-ms N   How long startup waits for the detector workers.
+  Names: credsweeper, gitleaks, promptguard-rules, shell-aware, ml-v9, ml-qwen.
+  With ml-v9 or ml-qwen on, readiness defaults to 180000 ms; with ml-qwen on,
+  the detector timeout defaults to 30000 ms. Same as PG_DETECTOR_ENABLE/DISABLE.
+
+Examples:
+  promptguard run --enable ml-v9
+  promptguard run --enable ml-qwen --disable shell-aware
+  promptguard run --policy majority
 `)
 }
 
@@ -33,8 +52,17 @@ function requireValue(args, index, option) {
   return value
 }
 
+// A detector list may arrive as one argument ("ml-v9,ml-qwen") or, from
+// PowerShell, which turns a,b into separate arguments, as several.
+function listValue(args, index, option) {
+  const parts = [requireValue(args, index, option)]
+  let next = index + 2
+  while (next < args.length && !String(args[next]).startsWith('-')) parts.push(args[next++])
+  return { value: parts.join(','), consumed: next - index - 1 }
+}
+
 function parseRun(args) {
-  const options = { noClaude: false, configPath: null, runtimeDirectory: null, claudeArgs: [] }
+  const options = { noClaude: false, configPath: null, runtimeDirectory: null, claudeArgs: [], detector: {} }
   for (let index = 0; index < args.length; index += 1) {
     const item = args[index]
     if (item === '--') {
@@ -44,8 +72,16 @@ function parseRun(args) {
     if (item === '--no-claude') options.noClaude = true
     else if (item === '--config') options.configPath = requireValue(args, index++, item)
     else if (item === '--runtime-dir') options.runtimeDirectory = requireValue(args, index++, item)
+    else if (item === '--enable' || item === '--disable') {
+      const { value, consumed } = listValue(args, index, item)
+      options.detector[item.slice(2)] = value
+      index += consumed
+    }
+    else if (item === '--policy') options.detector.policy = requireValue(args, index++, item)
+    else if (item === '--detector-timeout-ms') options.detector.detectorTimeoutMs = requireValue(args, index++, item)
+    else if (item === '--readiness-timeout-ms') options.detector.readinessTimeoutMs = requireValue(args, index++, item)
     else if (item === '--help' || item === '-h') options.help = true
-    else throw new Error('An unknown run option was provided.')
+    else throw new Error(`An unknown run option was provided (${String(item).slice(0, 40)}). See promptguard --help.`)
   }
   return options
 }
@@ -81,6 +117,11 @@ async function runCommand(args) {
   let supervisor
   const signalHandlers = new Map()
   try {
+    // Detector options become PG_* variables before the config is read, so the
+    // supervisor and both detector workers see the same selection.
+    const selection = detectorEnvironment(options.detector)
+    Object.assign(process.env, selection.env)
+    console.error(selection.summary)
     const config = loadConfig(options.configPath)
     const python = resolvePython(config)
     supervisor = new RuntimeSupervisor(config, python, {
@@ -209,9 +250,13 @@ async function main(argv) {
   throw new Error('An unknown PromptGuard command was provided.')
 }
 
-main(process.argv.slice(2)).then(code => {
-  process.exitCode = code
-}).catch(error => {
-  console.error(`PromptGuard command failed: ${conciseError(error)}`)
-  process.exitCode = 1
-})
+if (require.main === module) {
+  main(process.argv.slice(2)).then(code => {
+    process.exitCode = code
+  }).catch(error => {
+    console.error(`PromptGuard command failed: ${conciseError(error)}`)
+    process.exitCode = 1
+  })
+}
+
+module.exports = { parseRun }

@@ -18,20 +18,20 @@
 
 ## 켜고 끄기
 
-`detector.json`을 고치지 않고 환경변수로 켠다. 이름은 쉼표로 구분하고, `PG_DETECTOR_DISABLE`이 `PG_DETECTOR_ENABLE`보다 우선한다.
+`promptguard run` 옵션으로 고른다. 이름은 쉼표로 구분하고, `--disable`이 `--enable`보다 우선한다.
 
 ```powershell
-# 공통: 모델을 켤 때는 worker 준비 대기 시간을 늘린다
-$env:PG_READINESS_TIMEOUT_MS = '180000'
-# v9만
-$env:PG_DETECTOR_ENABLE = 'ml-v9'
-# Qwen만 (느리므로 detector 응답 대기 시간도 늘린다)
-$env:PG_DETECTOR_ENABLE = 'ml-qwen'; $env:PG_DETECTOR_TIMEOUT_MS = '30000'
-# 둘 다
-$env:PG_DETECTOR_ENABLE = 'ml-v9,ml-qwen'; $env:PG_DETECTOR_TIMEOUT_MS = '30000'
-# 기존 4종만 (끄기)
-Remove-Item Env:PG_DETECTOR_ENABLE
+cd sample-protected-project
+..\promptguard.cmd run --enable ml-v9                       # 기본 4종 + v9
+..\promptguard.cmd run --enable ml-qwen                     # 기본 4종 + Qwen
+..\promptguard.cmd run --enable ml-v9,ml-qwen               # 둘 다
+..\promptguard.cmd run --enable ml-v9 --disable shell-aware # 섞어서
+..\promptguard.cmd run --policy majority                    # 기존 다수결로 비교
 ```
+
+- ML 모듈이 켜지면 worker 준비 대기 시간이 자동으로 180초가 된다. Qwen이 켜지면 detector 응답 대기 시간도 30초가 된다. `--readiness-timeout-ms`, `--detector-timeout-ms`로 직접 정할 수 있다.
+- 시작할 때 `Detectors: ...` 줄에 실제로 켜지는 모듈이 나온다. 이름을 잘못 쓰거나 전부 끄면 시작하지 않는다.
+- 같은 동작을 환경변수(`PG_DETECTOR_ENABLE`, `PG_DETECTOR_DISABLE`, `PG_DETECTOR_CANDIDATE_POLICY`, `PG_READINESS_TIMEOUT_MS`, `PG_DETECTOR_TIMEOUT_MS`)로도 할 수 있다. 옵션이 환경변수보다 우선한다.
 
 `promptguard status`의 detector 정보에서 `adapters`(켜진 모듈)와 `skipped`(건너뛴 모듈과 이유)를 확인한다.
 
