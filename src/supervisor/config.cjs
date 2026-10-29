@@ -99,6 +99,7 @@ function validateAndResolve(input, configPath) {
     modDetectorPort: envInteger('PG_MOD_DETECTOR_PORT', input.modDetectorPort),
     guardDetectorPort: envInteger('PG_GUARD_DETECTOR_PORT', input.guardDetectorPort),
     detectorTimeoutMs: envInteger('PG_DETECTOR_TIMEOUT_MS', input.detectorTimeoutMs),
+    readinessTimeoutMs: envInteger('PG_READINESS_TIMEOUT_MS', input.readinessTimeoutMs),
     maxBodyBytes: envInteger('PG_MAX_BODY_BYTES', input.maxBodyBytes),
     auditPath: process.env.PG_AUDIT_PATH || input.auditPath,
     upstreamBaseUrl: process.env.PG_UPSTREAM_BASE_URL || input.upstreamBaseUrl,

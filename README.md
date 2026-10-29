@@ -1,6 +1,6 @@
 # PromptGuard Claude Demo V0
 
-Claude Code 2.1.291 Native Mod와 여러 detector 모듈(CredSweeper 1.19.0, Gitleaks, 자체 룰)의 합의 판정을 이용해 prompt/context/tool output의 credential **값만** placeholder로 바꾸는 Windows/macOS용 portable demo입니다.
+Claude Code 2.1.291 Native Mod와 여러 detector 모듈(CredSweeper 1.19.0, Gitleaks, 자체 룰)의 합의 판정을 이용해 prompt/context/tool output의 credential **값만** placeholder로 바꾸는 Windows/macOS용 portable demo입니다. 기본 설정(`candidate_policy: "union"`)에서는 Shell-aware adapter를 포함한 모든 모듈의 합집합을 마스킹합니다.
 
 > 이 저장소의 password, API key, token, PEM은 모두 비기능 synthetic fixture입니다. 실제 credential은 포함하지 않습니다.
 
@@ -177,23 +177,35 @@ cd /path/to/your-project
 
 ## 6. Detector 모듈과 합의 정책
 
-detector는 여러 모듈을 **adapter**로 감싸 같은 인터페이스(`name`, `version`, `scan(text)`)로 다룹니다. detector 입장에서는 이름만 다른 adapter 여럿이 각자 span에 투표하는 구조이며, 합의 정책을 통과한 span만 placeholder로 바뀝니다.
+detector는 여러 모듈을 **adapter**로 감싸 같은 인터페이스(`name`, `version`, `scan(text)`)로 다룹니다. 응답에는 두 계층이 있습니다.
+
+- `findings`: Native Mod가 마스킹하고 Final Guard가 차단 기준으로 쓰는 span. `candidate_policy`가 무엇을 넣을지 정합니다.
+  - `"union"`(기본값): 활성 모듈 중 **하나만** 잡아도 포함합니다. 중간 발표 데모의 recall-first 설정입니다.
+  - `"majority"`: 기존 CredSweeper/Gitleaks/custom rules 다수결만 사용합니다. `candidate_only` 모듈은 투표하지 않습니다. 이전 동작과 같아서 비교나 롤백에 씁니다.
+- `candidates`: 정책과 상관없이 모든 모듈의 합집합. 겹치는 span은 하나로 합치고, 어느 모듈이 왜 잡았는지(provenance)를 raw 값 없이 남깁니다.
+
+`PG_DETECTOR_CANDIDATE_POLICY=majority`로 실행하면 설정 파일을 고치지 않고 기존 동작으로 돌아갑니다. 팀 ML 모듈은 `PG_DETECTOR_ENABLE=ml-v9` 처럼 켭니다. 준비와 옵션은 [ML adapter 문서](docs/ML_ADAPTERS.md)를 참고하세요.
 
 | adapter 이름 | 종류 | 구현 |
 | --- | --- | --- |
 | `credsweeper` | 오픈소스 (Python 라이브러리) | `src/detector/pgdetector/adapters/credsweeper.py` |
 | `gitleaks` | 오픈소스 (Go 바이너리, `gitleaks stdin`) | `src/detector/pgdetector/adapters/gitleaks.py` |
 | `promptguard-rules` | 직접 만든 모듈 (순수 Python 정규식/키 분류) | `src/detector/pgdetector/adapters/patterns.py` |
+| `shell-aware` | command/source/sink 의미 기반 candidate generator | `src/detector/pgdetector/adapters/shell_aware.py` |
+| `ml-v9` | 팀 mmBERT span 모델 (기본 꺼짐) | `src/detector/pgdetector/adapters/span_models.py` |
+| `ml-qwen` | 팀 Qwen2.5-Coder LoRA span 모델 (기본 꺼짐) | `src/detector/pgdetector/adapters/span_models.py` |
 
 모듈 목록과 정책은 `src/detector/detector.json`에서 지정합니다.
 
 ```json
 {
   "consensus": { "mode": "majority" },
+  "candidate_policy": "union",
   "adapters": [
     { "name": "credsweeper", "type": "credsweeper", "required": true, "options": { ... } },
     { "name": "gitleaks", "type": "gitleaks", "required": false, "options": { ... } },
-    { "name": "promptguard-rules", "type": "patterns", "required": true, "options": { ... } }
+    { "name": "promptguard-rules", "type": "patterns", "required": true, "options": { ... } },
+    { "name": "shell-aware", "type": "shell-aware", "required": true, "candidate_only": true, "options": { ... } }
   ]
 }
 ```
@@ -219,7 +231,7 @@ $env:PG_DETECTOR_CONSENSUS = 'at_least:2'; ..\promptguard.cmd run
 
 Runtime V1에서는 이 값이 Mod용·Guard용 detector worker 모두에 적용됩니다. 기존 `start-promptguard.*` launcher에도 같은 환경 변수를 쓸 수 있습니다.
 
-기존 `start-promptguard.*` launcher는 시작할 때 활성 모듈과 정책을 출력합니다(`Detector: credsweeper, gitleaks, promptguard-rules (consensus majority, 2 vote(s) needed)`).
+launcher와 detector health(`/status`)는 활성/skip 모듈, `candidate_policy`, 보호에 쓰는 모듈(`protection_adapters`)과 필요한 표 수를 출력합니다.
 
 판정 규칙:
 
@@ -228,6 +240,7 @@ Runtime V1에서는 이 값이 Mod용·Guard용 detector worker 모두에 적용
 - finding의 `detectors`에는 동의한 모듈 이름(`["credsweeper", "promptguard-rules"]`)이, `rule_id`에는 V0와 같은 형식으로 각 모듈의 룰 이름이 `+`로 이어져(`Password+secret-assignment`) 남습니다.
 - 실행 중 한 모듈이라도 실패하면 해당 요청은 `ADAPTER_FAILURE:<이름>` 오류로 fail-closed 됩니다.
 - `required: false` 모듈은 도구가 설치되지 않았으면 시작 시 제외되고, 투표 수(N)에서도 빠집니다. 활성 모듈 수보다 큰 `at_least` 값은 아무것도 가리지 못하게 되므로 worker가 시작을 거부합니다.
+- `candidate_only: true` 모듈은 `majority` 투표에서 빠집니다. `union`에서는 다른 모듈과 똑같이 보호에 들어갑니다. 실행 중 실패하면 다른 adapter와 동일하게 요청이 fail-closed 됩니다.
 
 > `unanimous`는 가장 약한 모듈의 재현율에 맞춰집니다. gitleaks 기본 룰은 password류를 거의 잡지 못해서, 이 저장소의 fixture에서 만장일치는 32개 중 8개만 가리고 sample 프로젝트의 password/token은 그대로 통과시킵니다.
 
@@ -249,12 +262,13 @@ class MyAdapter(DetectorAdapter):
 
 ## 검증 결과
 
-기본 설정(3개 모듈, `majority`) 기준:
+`majority` 정책, 3개 모듈 기준(이전 검증 결과):
 
 - Ground truth: TP 32 / FP 0 / FN 0
 - Precision / Recall / F1 / F2: 1.0
 - 정책별 TP/FP/FN(같은 투표 결과 재사용): `any` 32/0/0, `majority`(=`at_least:2`) 32/0/0, `unanimous` 8/0/24
 - 모듈 단독 TP/FP/FN: `credsweeper` 32/0/0, `promptguard-rules` 32/0/0, `gitleaks` 8/0/24
+- `union` 정책(Shell-aware 포함)의 fixture·shell suite 수치는 [Shell-aware v0.2 보고서](docs/SHELL_AWARE_V0_2_UNION_MASKING.md)를 참고하세요. CredSweeper/Gitleaks를 포함한 재측정은 그 문서의 "PC에서 재측정" 절차로 다시 만듭니다.
 - 합의 로직 단위 테스트(`tests/detector/test_consensus.py`): 19/19 PASS
 - detector 단일 스캔 p50: 약 23ms (gitleaks 프로세스 기동이 대부분이며, 같은 머신에서 CredSweeper 단독은 약 0.4ms)
 - 5MB scan: 약 3.8초 (같은 macOS 머신에서 CredSweeper 단독은 약 3.3초)
@@ -262,7 +276,7 @@ class MyAdapter(DetectorAdapter):
 
 지연 시간이 중요하면 `detector.json`에서 gitleaks 항목에 `"enabled": false`를 지정하면 됩니다.
 
-기계 판독 결과는 `outputs/`에 있습니다.
+기계 판독 결과는 `outputs/`에 있습니다. Shell-aware 설계, union 마스킹, 한계는 [v0.2 보고서](docs/SHELL_AWARE_V0_2_UNION_MASKING.md)를 참고하세요. v0.1 보고서는 ML adapter 수치가 섞여 있어 삭제했습니다(커밋 `e7b15df`에 남아 있음).
 
 ## 중요 제한
 

@@ -1,5 +1,6 @@
 {
   "consensus": { "mode": "majority" },
+  "candidate_policy": "union",
   "adapters": [
     {
       "name": "credsweeper",
@@ -28,6 +29,45 @@
       "required": true,
       "options": {
         "min_value_length": 8
+      }
+    },
+    {
+      "name": "shell-aware",
+      "type": "shell-aware",
+      "required": true,
+      "candidate_only": true,
+      "options": {
+        "min_value_length": 1
+      }
+    },
+    {
+      "name": "ml-v9",
+      "type": "ml-v9",
+      "enabled": false,
+      "required": false,
+      "candidate_only": true,
+      "options": {
+        "repository": "../../../promptguard-model",
+        "checkpoint": "models/span-detector-v9",
+        "device": "cpu",
+        "gate": "always",
+        "timeout_seconds": 4
+      }
+    },
+    {
+      "name": "ml-qwen",
+      "type": "ml-qwen",
+      "enabled": false,
+      "required": false,
+      "candidate_only": true,
+      "options": {
+        "repository": "../../../promptguard-model",
+        "bundle": "models/qwen-span-v2",
+        "device": "auto",
+        "gate": "cue",
+        "timeout_seconds": 25,
+        "max_chunks": 8,
+        "overlap_lines": 1
       }
     }
   ]
