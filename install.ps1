@@ -8,19 +8,28 @@ if ($env:PROMPTGUARD_PYTHON -and (Test-Path -LiteralPath $env:PROMPTGUARD_PYTHON
 } else {
   $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
   if ($pyLauncher) {
-    & $pyLauncher.Source -3.12 -c "import sys" 2>$null
-    if ($LASTEXITCODE -eq 0) { $pythonExe = $pyLauncher.Source; $pythonPrefix = @('-3.12') }
+    foreach ($candidate in @('-3.12', '-3.14')) {
+      if ($pythonExe) { break }
+      # Under 'Stop', Windows PowerShell 5 turns py's "no runtime" stderr line into
+      # a terminating error, so the probe runs with 'Continue'.
+      $previous = $ErrorActionPreference
+      $ErrorActionPreference = 'Continue'
+      & $pyLauncher.Source $candidate -c "import sys" 2>$null
+      $probe = $LASTEXITCODE
+      $ErrorActionPreference = $previous
+      if ($probe -eq 0) { $pythonExe = $pyLauncher.Source; $pythonPrefix = @($candidate) }
+    }
   }
   if (-not $pythonExe) {
     $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
     if ($pythonCommand) { $pythonExe = $pythonCommand.Source }
   }
 }
-if (-not $pythonExe) { throw 'Python 3.12를 찾지 못했습니다. Python 3.12를 설치하고 PATH에 추가한 뒤 다시 실행하세요.' }
+if (-not $pythonExe) { throw 'Python 3.12 또는 3.14를 찾지 못했습니다. 설치하고 PATH에 추가한 뒤 다시 실행하세요.' }
 
 $version = & $pythonExe @pythonPrefix -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"
-if ($LASTEXITCODE -ne 0 -or -not $version.StartsWith('3.12.')) {
-  throw "Python 3.12가 필요합니다. 현재 버전: $version"
+if ($LASTEXITCODE -ne 0 -or -not ($version.StartsWith('3.12.') -or $version.StartsWith('3.14.'))) {
+  throw "Python 3.12 또는 3.14가 필요합니다. 현재 버전: $version"
 }
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {

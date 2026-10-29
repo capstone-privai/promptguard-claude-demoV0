@@ -7,7 +7,7 @@ Claude Code 2.1.291 Native Mod와 여러 detector 모듈(CredSweeper 1.19.0, Git
 ## 준비물
 
 - Windows PowerShell 5.1 이상 또는 macOS의 Bash
-- Python 3.12 (PATH 등록). 설치 스크립트는 3.12를 찾고, `promptguard run`은 3.14로 만든 `.venv`도 사용할 수 있습니다.
+- Python 3.12 또는 3.14 (PATH 등록). Windows 설치 스크립트(`install.ps1`)는 3.12와 3.14를 모두 찾고, macOS `install.sh`는 3.12를 찾습니다. `promptguard run`은 둘 중 어느 버전으로 만든 `.venv`도 사용합니다.
 - Node.js LTS
 - macOS: Xcode Command Line Tools (`xcode-select --install`)
 - Claude Code 2.1.291 (기본 설정은 이 버전만 허용합니다. 다른 버전은 아래 [버전 고정](#claude-code-버전-고정) 참고)
@@ -33,7 +33,7 @@ cd promptguard-claude-demoV0
 ```
 
 설치 시 repository-local `.venv`에 `credsweeper==1.19.0`을 고정 설치합니다.
-`py -3.12` 또는 PATH의 `python`을 자동 탐색합니다. 별도 Python 경로를 써야 한다면 `PROMPTGUARD_PYTHON` 환경 변수에 `python.exe` 경로를 지정할 수 있습니다.
+`py -3.12`, `py -3.14` 또는 PATH의 `python`을 자동 탐색합니다. 별도 Python 경로를 써야 한다면 `PROMPTGUARD_PYTHON` 환경 변수에 `python.exe` 경로를 지정할 수 있습니다.
 
 ### macOS
 
