@@ -104,7 +104,7 @@ class ShellAwareTests(unittest.TestCase):
         text = "somecmd --password 'SyntheticPass_123'"
         start = text.index("SyntheticPass_123")
         legacy = FixedAdapter("legacy", [(start, start + len("SyntheticPass_123"))], ROOT)
-        detector = Detector([legacy, self.adapter], ConsensusPolicy.parse("any"), candidate_only=["shell-aware"])
+        detector = Detector([legacy, self.adapter], ConsensusPolicy.parse("any"), candidate_only=["shell-aware"], candidate_policy="majority")
         ballots, errors = detector.collect([text])
         self.assertEqual([], errors)
         protected, _ = detector.decide(text, "unit", ballots[0])
@@ -119,7 +119,7 @@ class ShellAwareTests(unittest.TestCase):
         self.assertEqual(1, len(response["candidates"]))
         self.assertEqual(["legacy"], response["findings"][0]["detectors"])
         self.assertEqual(["legacy", "shell-aware"], response["candidates"][0]["detectors"])
-        self.assertEqual("union", response["candidate_policy"])
+        self.assertEqual("majority", response["candidate_policy"])
         self.assertNotIn("value_hash", response["candidates"][0])
         self.assertNotIn("SyntheticPass_123", repr(response["candidates"][0].get("evidence", [])))
 
@@ -140,9 +140,14 @@ class ShellAwareTests(unittest.TestCase):
             self.adapter.scan(text)
         self.assertNotIn("SyntheticPass_DO_NOT_LOG", captured_out.getvalue() + captured_err.getvalue())
 
-    def test_scan_reports_ml_presence_from_active_topology(self) -> None:
-        detector = Detector([FixedAdapter("ml-detector", [], ROOT)], ConsensusPolicy.parse("any"))
-        self.assertTrue(detector.scan("ordinary text", "unit")["ml"])
+    def test_union_policy_protects_shell_only_value(self) -> None:
+        text = "sshpass -p 'SyntheticPass_123' ssh u@h"
+        legacy = FixedAdapter("legacy", [], ROOT)
+        detector = Detector([legacy, self.adapter], ConsensusPolicy.parse("any"), candidate_only=["shell-aware"], candidate_policy="union")
+        response = detector.scan(text, "unit")
+        self.assertEqual("union", response["candidate_policy"])
+        self.assertEqual(1, len(response["findings"]))
+        self.assertEqual(["shell-aware"], response["findings"][0]["detectors"])
 
 
 if __name__ == "__main__":

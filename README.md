@@ -1,6 +1,6 @@
 # PromptGuard Claude Demo V0
 
-Claude Code 2.1.291 Native Mod와 여러 detector 모듈(CredSweeper 1.19.0, Gitleaks, 자체 룰)의 합의 판정을 이용해 prompt/context/tool output의 credential **값만** placeholder로 바꾸는 Windows/macOS용 portable demo입니다. 별도의 recall-first candidate 계층에서는 팀 ML detector와 Shell-aware adapter까지 포함한 합집합을 노출합니다.
+Claude Code 2.1.291 Native Mod와 여러 detector 모듈(CredSweeper 1.19.0, Gitleaks, 자체 룰)의 합의 판정을 이용해 prompt/context/tool output의 credential **값만** placeholder로 바꾸는 Windows/macOS용 portable demo입니다. 기본 설정(`candidate_policy: "union"`)에서는 Shell-aware adapter를 포함한 모든 모듈의 합집합을 마스킹합니다.
 
 > 이 저장소의 password, API key, token, PEM은 모두 비기능 synthetic fixture입니다. 실제 credential은 포함하지 않습니다.
 
@@ -12,7 +12,6 @@ Claude Code 2.1.291 Native Mod와 여러 detector 모듈(CredSweeper 1.19.0, Git
 - macOS: Xcode Command Line Tools (`xcode-select --install`)
 - Claude Code 2.1.291
 - 선택: Gitleaks 8.x (`brew install gitleaks`, Windows는 `scoop install gitleaks` 또는 GitHub release). 없으면 gitleaks 모듈만 건너뜁니다.
-- 선택: sibling `promptguard-model` repository와 Git LFS checkpoint. 없으면 candidate-only ML adapter만 건너뜁니다.
 - Claude Pro/Max/Team/Enterprise 계정 또는 Anthropic Console billing
 
 Claude Code가 없다면:
@@ -163,19 +162,20 @@ cd /path/to/your-project
 
 ## 5. Detector 모듈과 합의 정책
 
-detector는 여러 모듈을 **adapter**로 감싸 같은 인터페이스(`name`, `version`, `scan(text)`)로 다룹니다. 응답에는 두 계층이 공존합니다.
+detector는 여러 모듈을 **adapter**로 감싸 같은 인터페이스(`name`, `version`, `scan(text)`)로 다룹니다. 응답에는 두 계층이 있습니다.
 
-- `findings`: 기존 CredSweeper/Gitleaks/custom rules의 합의 정책을 통과한 span. Native Mod와 Final Guard가 사용합니다.
-- `candidates`: 활성 adapter 다섯 개 중 하나만 잡아도 포함되는 recall-first union. 겹치는 span은 canonicalize하고 provenance를 보존합니다.
+- `findings`: Native Mod가 마스킹하고 Final Guard가 차단 기준으로 쓰는 span. `candidate_policy`가 무엇을 넣을지 정합니다.
+  - `"union"`(기본값): 활성 모듈 중 **하나만** 잡아도 포함합니다. 중간 발표 데모의 recall-first 설정입니다.
+  - `"majority"`: 기존 CredSweeper/Gitleaks/custom rules 다수결만 사용합니다. `candidate_only` 모듈은 투표하지 않습니다. 이전 동작과 같아서 비교나 롤백에 씁니다.
+- `candidates`: 정책과 상관없이 모든 모듈의 합집합. 겹치는 span은 하나로 합치고, 어느 모듈이 왜 잡았는지(provenance)를 raw 값 없이 남깁니다.
 
-따라서 팀 ML 또는 Shell-aware가 후보를 추가해도 기존 protection majority와 fail-closed 동작은 약해지지 않습니다.
+`PG_DETECTOR_CANDIDATE_POLICY=majority`로 실행하면 설정 파일을 고치지 않고 기존 동작으로 돌아갑니다.
 
 | adapter 이름 | 종류 | 구현 |
 | --- | --- | --- |
 | `credsweeper` | 오픈소스 (Python 라이브러리) | `src/detector/pgdetector/adapters/credsweeper.py` |
 | `gitleaks` | 오픈소스 (Go 바이너리, `gitleaks stdin`) | `src/detector/pgdetector/adapters/gitleaks.py` |
 | `promptguard-rules` | 직접 만든 모듈 (순수 Python 정규식/키 분류) | `src/detector/pgdetector/adapters/patterns.py` |
-| `ml-detector` | 팀 span model (candidate-only, optional) | `src/detector/pgdetector/adapters/ml_span.py` |
 | `shell-aware` | command/source/sink 의미 기반 candidate generator | `src/detector/pgdetector/adapters/shell_aware.py` |
 
 모듈 목록과 정책은 `src/detector/detector.json`에서 지정합니다.
@@ -183,11 +183,11 @@ detector는 여러 모듈을 **adapter**로 감싸 같은 인터페이스(`name`
 ```json
 {
   "consensus": { "mode": "majority" },
+  "candidate_policy": "union",
   "adapters": [
     { "name": "credsweeper", "type": "credsweeper", "required": true, "options": { ... } },
     { "name": "gitleaks", "type": "gitleaks", "required": false, "options": { ... } },
     { "name": "promptguard-rules", "type": "patterns", "required": true, "options": { ... } },
-    { "name": "ml-detector", "type": "ml-span", "required": false, "candidate_only": true, "options": { ... } },
     { "name": "shell-aware", "type": "shell-aware", "required": true, "candidate_only": true, "options": { ... } }
   ]
 }
@@ -212,7 +212,7 @@ PG_DETECTOR_CONSENSUS=unanimous ../start-promptguard.sh
 $env:PG_DETECTOR_CONSENSUS = 'at_least:2'; ..\start-promptguard.cmd
 ```
 
-launcher와 detector health는 활성/skip 모듈과 protection 정책을 출력합니다. Candidate-only adapter는 protection vote 수에 포함되지 않습니다.
+launcher와 detector health(`/status`)는 활성/skip 모듈, `candidate_policy`, 보호에 쓰는 모듈(`protection_adapters`)과 필요한 표 수를 출력합니다.
 
 판정 규칙:
 
@@ -221,7 +221,7 @@ launcher와 detector health는 활성/skip 모듈과 protection 정책을 출력
 - finding의 `detectors`에는 동의한 모듈 이름(`["credsweeper", "promptguard-rules"]`)이, `rule_id`에는 V0와 같은 형식으로 각 모듈의 룰 이름이 `+`로 이어져(`Password+secret-assignment`) 남습니다.
 - 실행 중 한 모듈이라도 실패하면 해당 요청은 `ADAPTER_FAILURE:<이름>` 오류로 fail-closed 됩니다.
 - `required: false` 모듈은 도구가 설치되지 않았으면 시작 시 제외되고, 투표 수(N)에서도 빠집니다. 활성 모듈 수보다 큰 `at_least` 값은 아무것도 가리지 못하게 되므로 worker가 시작을 거부합니다.
-- `candidate_only: true` 모듈은 `candidates` union에는 포함되지만 기존 `findings` vote에는 포함되지 않습니다. 실행 중 실패하면 다른 adapter와 동일하게 요청이 fail-closed 됩니다.
+- `candidate_only: true` 모듈은 `majority` 투표에서 빠집니다. `union`에서는 다른 모듈과 똑같이 보호에 들어갑니다. 실행 중 실패하면 다른 adapter와 동일하게 요청이 fail-closed 됩니다.
 
 > `unanimous`는 가장 약한 모듈의 재현율에 맞춰집니다. gitleaks 기본 룰은 password류를 거의 잡지 못해서, 이 저장소의 fixture에서 만장일치는 32개 중 8개만 가리고 sample 프로젝트의 password/token은 그대로 통과시킵니다.
 
@@ -241,42 +241,15 @@ class MyAdapter(DetectorAdapter):
 
 `detector.json`에 `{"name": "my-tool", "type": "my_package.my_module:MyAdapter"}`처럼 `module:Class` 경로로 등록하면 기본 adapter 목록을 고치지 않아도 됩니다(모듈은 `src/detector` 아래 또는 `PYTHONPATH`에 있어야 합니다). 자주 쓰는 adapter는 `pgdetector/adapters/__init__.py`의 `ADAPTER_TYPES`에 짧은 이름으로 추가할 수 있습니다. 같은 adapter 종류를 옵션만 바꿔 다른 이름으로 여러 번 등록해도 각각 1표로 셉니다.
 
-### 선택: 팀 ML adapter 활성화
-
-기본 설치는 약 563 MB checkpoint와 PyTorch를 자동 다운로드하지 않습니다. 5-way union을 재현하려면 두 repository를 sibling으로 두고 팀 model의 Git LFS weight와 dependency를 demo의 `.venv`에 설치합니다.
-
-Windows:
-
-```powershell
-cd ..
-git clone https://github.com/capstone-privai/promptguard-model.git
-cd promptguard-model
-git lfs pull
-..\promptguard-claude-demoV0\.venv\Scripts\python.exe -m pip install -e .
-```
-
-macOS:
-
-```bash
-cd ..
-git clone https://github.com/capstone-privai/promptguard-model.git
-cd promptguard-model
-git lfs pull
-../promptguard-claude-demoV0/.venv/bin/python -m pip install -e .
-```
-
-현재 `span-detector-v9` bundle은 `production_ready: false`이고 Transformers tokenizer 경고가 남아 있으므로 candidate-only 평가 용도로 사용합니다.
-
 ## 검증 결과
 
-기존 protection 3개 모듈, candidate 5개가 모두 활성인 이번 평가 환경 기준:
+`majority` 정책, 3개 모듈 기준(이전 검증 결과):
 
 - Ground truth: TP 32 / FP 0 / FN 0
 - Precision / Recall / F1 / F2: 1.0
 - 정책별 TP/FP/FN(같은 투표 결과 재사용): `any` 32/0/0, `majority`(=`at_least:2`) 32/0/0, `unanimous` 8/0/24
 - 모듈 단독 TP/FP/FN: `credsweeper` 32/0/0, `promptguard-rules` 32/0/0, `gitleaks` 8/0/24
-- legacy protection은 계속 TP 32 / FP 0 / FN 0이며, candidate union은 TP 32 / FP 3 / FN 0입니다.
-- 별도 shell synthetic suite에서 기존 4-way candidate recall 43.75% → 5-way 100%, Shell-aware 신규 TP 9 / 추가 FP 0 / 기존 candidate regression 0을 측정했습니다.
+- `union` 정책(Shell-aware 포함)의 fixture·shell suite 수치는 [Shell-aware v0.2 보고서](docs/SHELL_AWARE_V0_2_UNION_MASKING.md)를 참고하세요. CredSweeper/Gitleaks를 포함한 재측정은 그 문서의 "PC에서 재측정" 절차로 다시 만듭니다.
 - 합의 로직 단위 테스트(`tests/detector/test_consensus.py`): 19/19 PASS
 - detector 단일 스캔 p50: 약 23ms (gitleaks 프로세스 기동이 대부분이며, 같은 머신에서 CredSweeper 단독은 약 0.4ms)
 - 5MB scan: 약 3.8초 (같은 macOS 머신에서 CredSweeper 단독은 약 3.3초)
@@ -284,7 +257,7 @@ git lfs pull
 
 지연 시간이 중요하면 `detector.json`에서 gitleaks 항목에 `"enabled": false`를 지정하면 됩니다.
 
-기계 판독 결과는 `outputs/`에 있습니다. Shell-aware 설계와 한계는 [상세 보고서](docs/SHELL_AWARE_ADAPTER_REPORT.md), 팀 공유용 결론은 [한국어 브리프](docs/TEAM_BRIEF_SHELL_AWARE_KO.md)를 참고하세요.
+기계 판독 결과는 `outputs/`에 있습니다. Shell-aware 설계, union 마스킹, 한계는 [v0.2 보고서](docs/SHELL_AWARE_V0_2_UNION_MASKING.md)를 참고하세요. v0.1 보고서는 ML adapter 수치가 섞여 있어 삭제했습니다(커밋 `e7b15df`에 남아 있음).
 
 ## 중요 제한
 

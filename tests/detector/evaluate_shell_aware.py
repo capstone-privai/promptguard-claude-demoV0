@@ -207,7 +207,7 @@ def main() -> int:
         "synthetic_only": True, "raw_values_persisted": False,
     }
     comparison = {
-        **common, "baseline_3_detector_union": old_metrics, "with_shell_aware_union": new_metrics,
+        **common, "candidate_policy": detector.candidate_policy, "baseline_3_detector_union": old_metrics, "with_shell_aware_union": new_metrics,
         "shell_aware_only": shell_metrics, "shell_added_true_positive_count": len(added_ids),
         "shell_added_true_positives": added_ids,
         "old_candidate_coverage_regression_count": len(set(legacy_regressions)),

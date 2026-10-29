@@ -1,5 +1,6 @@
 {
   "consensus": { "mode": "majority" },
+  "candidate_policy": "union",
   "adapters": [
     {
       "name": "credsweeper",

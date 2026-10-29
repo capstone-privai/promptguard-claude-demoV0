@@ -19,20 +19,34 @@ from .core import CANONICAL_TYPES, MAX_SPAN, normalize, value_hash
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "detector.json"
 Ballots = dict[str, list[RawFinding]]
+CANDIDATE_POLICIES = ("union", "majority")
 
 
 class Detector:
-    def __init__(self, adapters: Sequence[DetectorAdapter], policy: ConsensusPolicy, skipped: Sequence[Mapping[str, str]] = (), candidate_only: Sequence[str] = ()) -> None:
+    def __init__(self, adapters: Sequence[DetectorAdapter], policy: ConsensusPolicy, skipped: Sequence[Mapping[str, str]] = (), candidate_only: Sequence[str] = (), candidate_policy: str = "majority") -> None:
         names = [adapter.name for adapter in adapters]
         if len(set(names)) != len(names):
             raise ValueError(f"adapter names must be unique: {names}")
+        if candidate_policy not in CANDIDATE_POLICIES:
+            raise ValueError(f"candidate_policy must be one of {CANDIDATE_POLICIES}, got {candidate_policy!r}")
         self.adapters = list(adapters)
         self.policy = policy
+        self.candidate_policy = candidate_policy
         self.candidate_only = set(candidate_only)
         if not self.candidate_only <= set(names):
             raise ValueError("candidate-only adapters must be active adapters")
-        self.protection_names = [name for name in names if name not in self.candidate_only]
-        self.required_votes = policy.required_votes(len(self.protection_names))
+        # The majority vote never counts candidate-only adapters, so "majority"
+        # stays identical to the pre-union detector.
+        self.majority_names = [name for name in names if name not in self.candidate_only]
+        self.majority_required_votes = policy.required_votes(len(self.majority_names))
+        if candidate_policy == "union":
+            # Recall-first protection: one adapter is enough for a span to be
+            # masked by the Native Mod and blocked by the Final Guard.
+            self.protection_names = list(names)
+            self.required_votes = 1
+        else:
+            self.protection_names = list(self.majority_names)
+            self.required_votes = self.majority_required_votes
         self.skipped = [dict(item) for item in skipped]
         self.priority = {name: index for index, name in enumerate(names)}
 
@@ -43,14 +57,16 @@ class Detector:
     def describe(self) -> dict[str, Any]:
         return {
             "detector": "ensemble",
+            "candidate_policy": self.candidate_policy,
             "consensus": str(self.policy),
             "required_votes": self.required_votes,
+            "majority_required_votes": self.majority_required_votes,
             "adapters": [{"name": adapter.name, "version": adapter.version} for adapter in self.adapters],
             "protection_adapters": self.protection_names,
+            "majority_adapters": self.majority_names,
             "candidate_adapters": self.names,
             "candidate_only_adapters": sorted(self.candidate_only),
             "skipped": self.skipped,
-            "ml": "ml-detector" in self.names,
         }
 
     def collect(self, texts: Sequence[str]) -> tuple[list[Ballots], list[str]]:
@@ -162,8 +178,7 @@ class Detector:
             "consensus": str(self.policy),
             "required_votes": self.required_votes,
             "adapters": self.names,
-            "ml": "ml-detector" in self.names,
-            "candidate_policy": "union",
+            "candidate_policy": self.candidate_policy,
         } for findings, candidates, errors in decided]
 
     def scan(self, text: str, source: str) -> dict[str, Any]:
@@ -208,9 +223,12 @@ def load_detector(config_path: str | Path | None = None, consensus: Any = None) 
     """Build the ensemble from detector.json.
 
     ``PG_DETECTOR_CONFIG`` and ``PG_DETECTOR_CONSENSUS`` override the config file
-    and its consensus policy. An adapter whose tool is missing aborts startup
-    unless its entry sets ``"required": false``, in which case it is skipped and
-    does not count as a voter.
+    and its consensus policy, and ``PG_DETECTOR_CANDIDATE_POLICY`` overrides
+    ``candidate_policy`` ("union" masks what any adapter finds; "majority" keeps
+    the original vote and ignores candidate-only adapters for protection). An
+    adapter whose tool is missing aborts startup unless its entry sets
+    ``"required": false``, in which case it is skipped and does not count as a
+    voter.
     """
     path = Path(config_path or os.environ.get("PG_DETECTOR_CONFIG") or DEFAULT_CONFIG).resolve()
     config = json.loads(path.read_text(encoding="utf-8"))
@@ -231,4 +249,5 @@ def load_detector(config_path: str | Path | None = None, consensus: Any = None) 
                 raise
             skipped.append({"name": name, "reason": str(exc)})
             print(f"PromptGuard detector: optional adapter {name!r} skipped ({exc})", file=sys.stderr, flush=True)
-    return Detector(adapters, policy, skipped, candidate_only)
+    candidate_policy = os.environ.get("PG_DETECTOR_CANDIDATE_POLICY") or config.get("candidate_policy", "majority")
+    return Detector(adapters, policy, skipped, candidate_only, candidate_policy)
