@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -21,6 +21,9 @@ class RawFinding:
     type: str
     rule_id: str
     confidence: str = "moderate"
+    family: str | None = None
+    evidence: Mapping[str, str] = field(default_factory=dict)
+    score: float | None = None
 
 
 class AdapterUnavailable(RuntimeError):

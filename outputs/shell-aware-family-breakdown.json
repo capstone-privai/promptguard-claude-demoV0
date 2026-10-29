@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "fixture_version": 1,
+  "git_revision": "b6d8de2be15c1bc6d8dbc15d59f539d27a6091aa",
+  "active_adapters": [
+    "credsweeper",
+    "promptguard-rules",
+    "shell-aware"
+  ],
+  "skipped_adapters": [
+    {
+      "name": "gitleaks",
+      "reason": "gitleaks binary 'gitleaks' not found"
+    }
+  ],
+  "required_baseline_missing": [
+    "gitleaks"
+  ],
+  "adapter_errors": [],
+  "synthetic_only": true,
+  "raw_values_persisted": false,
+  "families": {
+    "expect_send": {
+      "gt": 2,
+      "tp": 2,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "function_argument": {
+      "gt": 4,
+      "tp": 4,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "here_string": {
+      "gt": 1,
+      "tp": 1,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "heredoc": {
+      "gt": 3,
+      "tp": 3,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "known_assignment": {
+      "gt": 2,
+      "tp": 0,
+      "fn": 2,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 0.0
+    },
+    "long_option": {
+      "gt": 4,
+      "tp": 4,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "powershell_param": {
+      "gt": 1,
+      "tp": 1,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "powershell_securestring": {
+      "gt": 1,
+      "tp": 1,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "short_option": {
+      "gt": 6,
+      "tp": 6,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "stdin_sink": {
+      "gt": 3,
+      "tp": 3,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0
+    }
+  }
+}

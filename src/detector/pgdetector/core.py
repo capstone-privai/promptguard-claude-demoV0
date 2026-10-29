@@ -109,6 +109,27 @@ def joined_detectors(*items: dict[str, Any]) -> list[str]:
     return sorted({name for item in items for name in item.get("detectors", [])})
 
 
+def joined_evidence(*items: dict[str, Any]) -> list[dict[str, Any]]:
+    """Deduplicate raw-free adapter evidence while retaining provenance."""
+    output: list[dict[str, Any]] = []
+    seen = set()
+    for item in items:
+        for evidence in item.get("evidence", []):
+            normalized = {
+                "adapter": str(evidence.get("adapter", "unknown")),
+                "family": str(evidence.get("family", "unknown")),
+                "strength": str(evidence.get("strength", "ambiguous")),
+                "details": {str(key): str(value) for key, value in sorted(evidence.get("details", {}).items())},
+            }
+            if evidence.get("score") is not None:
+                normalized["score"] = float(evidence["score"])
+            key = repr(normalized)
+            if key not in seen:
+                seen.add(key)
+                output.append(normalized)
+    return sorted(output, key=lambda row: (row["adapter"], row["family"], row["strength"], repr(row["details"])))
+
+
 def normalize(raw: list[dict[str, Any]], text: str, source: str) -> tuple[list[dict[str, Any]], list[str]]:
     valid: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -138,6 +159,7 @@ def normalize(raw: list[dict[str, Any]], text: str, source: str) -> tuple[list[d
             kept = seen[key]
             kept["rule_id"] = joined_rule_ids(kept["rule_id"], item["rule_id"])
             kept["detectors"] = joined_detectors(kept, item)
+            kept["evidence"] = joined_evidence(kept, item)
             kept["confidence"] = "strong" if "strong" in {kept["confidence"], item["confidence"]} else kept["confidence"]
             continue
         seen[key] = item
@@ -159,6 +181,7 @@ def normalize(raw: list[dict[str, Any]], text: str, source: str) -> tuple[list[d
         previous["type"] = previous["type"] if previous["type"] != "CREDENTIAL" else item["type"]
         previous["rule_id"] = joined_rule_ids(previous["rule_id"], item["rule_id"])
         previous["detectors"] = joined_detectors(previous, item)
+        previous["evidence"] = joined_evidence(previous, item)
         previous["confidence"] = "strong" if "strong" in {previous["confidence"], item["confidence"]} else previous["confidence"]
         previous["value_hash"] = value_hash(text[union_start:union_end])
 
@@ -170,7 +193,7 @@ def normalize(raw: list[dict[str, Any]], text: str, source: str) -> tuple[list[d
         start = utf16_cursor + utf16_len(text[cp_cursor:item["cp_start"]])
         end = start + utf16_len(text[item["cp_start"]:item["cp_end"]])
         cp_cursor, utf16_cursor = item["cp_end"], end
-        output.append({
+        normalized = {
             "type": item["type"],
             "rule_id": item["rule_id"],
             "detectors": sorted(item.get("detectors", [])),
@@ -180,5 +203,8 @@ def normalize(raw: list[dict[str, Any]], text: str, source: str) -> tuple[list[d
             "end": end,
             "source": source,
             "offset_unit": "utf16_code_units",
-        })
+        }
+        if item.get("evidence"):
+            normalized["evidence"] = joined_evidence(item)
+        output.append(normalized)
     return output, sorted(set(errors))
