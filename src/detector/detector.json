@@ -31,18 +31,6 @@
       }
     },
     {
-      "name": "ml-detector",
-      "type": "ml-span",
-      "required": false,
-      "candidate_only": true,
-      "options": {
-        "repository": "../../../promptguard-model",
-        "checkpoint": "models/span-detector-v9",
-        "device": "cpu",
-        "strong_threshold": 0.9999
-      }
-    },
-    {
       "name": "shell-aware",
       "type": "shell-aware",
       "required": true,

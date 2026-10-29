@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT / "src" / "detector"))
 from pgdetector import load_detector  # noqa: E402
 
 
-OLD_FOUR = {"credsweeper", "gitleaks", "promptguard-rules", "ml-detector"}
+BASELINE = {"credsweeper", "gitleaks", "promptguard-rules"}
 SHELL = "shell-aware"
 
 
@@ -124,22 +124,22 @@ def main() -> int:
     cases = fixture["cases"]
     detector = load_detector()
     active = set(detector.names)
-    missing_old = sorted(OLD_FOUR - active)
+    missing_old = sorted(BASELINE - active)
     shell_adapter = next(adapter for adapter in detector.adapters if adapter.name == SHELL)
-    old_adapters = [adapter for adapter in detector.adapters if adapter.name in OLD_FOUR]
+    old_adapters = [adapter for adapter in detector.adapters if adapter.name in BASELINE]
     full_adapters = [*old_adapters, shell_adapter]
     texts = [case["text"] for case in cases]
     ballots_list, adapter_errors = detector.collect(texts)
     records = []
     family = defaultdict(Counter)
     added_ids, legacy_regressions = [], []
-    shell_tp_golds = ml_overlap_golds = independent_golds = 0
+    shell_tp_golds = independent_golds = 0
 
     for case, ballots in zip(cases, ballots_list):
         text = case["text"]
         golds = gold_spans(case)
-        old_ballots = {name: rows for name, rows in ballots.items() if name in OLD_FOUR}
-        new_ballots = {name: rows for name, rows in ballots.items() if name in OLD_FOUR | {SHELL}}
+        old_ballots = {name: rows for name, rows in ballots.items() if name in BASELINE}
+        new_ballots = {name: rows for name, rows in ballots.items() if name in BASELINE | {SHELL}}
         shell_ballots = {SHELL: ballots.get(SHELL, [])}
         old, old_errors = detector.decide(text, "evaluation", old_ballots, 1, candidate_scope=True, include_evidence=True)
         new, new_errors = detector.decide(text, "evaluation", new_ballots, 1, candidate_scope=True, include_evidence=True)
@@ -147,7 +147,6 @@ def main() -> int:
         if old_errors or new_errors or shell_errors:
             raise RuntimeError("invalid candidate offsets")
         old_spans, new_spans, shell_spans = spans(text, old), spans(text, new), spans(text, shell)
-        ml_spans = [(row.start, row.end) for row in ballots.get("ml-detector", [])]
         for old_span in old_spans:
             if not any(start <= old_span[0] and end >= old_span[1] for start, end in new_spans):
                 legacy_regressions.append(case["id"])
@@ -155,12 +154,10 @@ def main() -> int:
             old_hit = any(covers(span, gold) for span in old_spans)
             new_hit = any(covers(span, gold) for span in new_spans)
             shell_hit = any(covers(span, gold) for span in shell_spans)
-            ml_hit = any(covers(span, gold) for span in ml_spans)
             if new_hit and not old_hit:
                 added_ids.append({"case_id": case["id"], "family": gold["family"]})
             if shell_hit:
                 shell_tp_golds += 1
-                ml_overlap_golds += int(ml_hit)
                 independent_golds += int(not old_hit)
             stats = family[gold["family"]]
             stats["gt"] += 1
@@ -206,28 +203,27 @@ def main() -> int:
     common = {
         "schema_version": 1, "fixture_version": fixture["schema_version"], "git_revision": revision,
         "active_adapters": detector.names, "skipped_adapters": detector.skipped,
-        "required_old_four_missing": missing_old, "adapter_errors": adapter_errors,
+        "required_baseline_missing": missing_old, "adapter_errors": adapter_errors,
         "synthetic_only": True, "raw_values_persisted": False,
     }
     comparison = {
-        **common, "baseline_4_detector_union": old_metrics, "new_5_detector_union": new_metrics,
+        **common, "baseline_3_detector_union": old_metrics, "with_shell_aware_union": new_metrics,
         "shell_aware_only": shell_metrics, "shell_added_true_positive_count": len(added_ids),
         "shell_added_true_positives": added_ids,
         "old_candidate_coverage_regression_count": len(set(legacy_regressions)),
         "old_candidate_coverage_regression_case_ids": sorted(set(legacy_regressions)),
-        "ml_shell_overlap_rate_on_shell_tp": round(ml_overlap_golds / shell_tp_golds, 6) if shell_tp_golds else 0.0,
         "shell_independent_secret_ratio": round(independent_golds / old_metrics["gold"], 6) if old_metrics["gold"] else 0.0,
     }
     shell_output = {**common, "metrics": shell_metrics, "added_true_positive_count": len(added_ids), "added_case_ids": [row["case_id"] for row in added_ids]}
     old_latency_summary, full_latency_summary = latency(old_latency), latency(full_latency)
     latency_output = {
         **common, "measurement": "warm in-process per-input; adapter scans concurrent within each union; excludes model load and HTTP/MCP",
-        "baseline_4_detector_union": old_latency_summary, "new_5_detector_union": full_latency_summary,
+        "baseline_3_detector_union": old_latency_summary, "with_shell_aware_union": full_latency_summary,
         "shell_aware_only": latency(shell_latency),
         "paired_delta_ms": latency([new - old for new, old in zip(full_latency, old_latency)]),
         "p50_union_difference_ms": round(full_latency_summary["p50_ms"] - old_latency_summary["p50_ms"], 4),
         "p95_union_difference_ms": round(full_latency_summary["p95_ms"] - old_latency_summary["p95_ms"], 4),
-        "interpretation": "Union adapters run concurrently. Difference is dominated by ML/process noise when shell-aware latency is below the existing critical path.",
+        "interpretation": "Union adapters run concurrently. When shell-aware latency is below the existing critical path, the union difference is dominated by Gitleaks process startup and scheduling noise.",
     }
     outputs = ROOT / "outputs"
     outputs.mkdir(exist_ok=True)
@@ -239,7 +235,7 @@ def main() -> int:
     }.items():
         (outputs / name).write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({
-        "active": detector.names, "missing_old_four": missing_old,
+        "active": detector.names, "missing_baseline": missing_old,
         "old_recall": old_metrics["secret_value_exposure_recall"], "new_recall": new_metrics["secret_value_exposure_recall"],
         "added_tp": len(added_ids), "shell_fp": shell_metrics["fp"], "regressions": len(set(legacy_regressions)),
     }))
