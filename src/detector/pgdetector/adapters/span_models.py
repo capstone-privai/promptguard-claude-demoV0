@@ -6,7 +6,7 @@ PG_DETECTOR_ENABLE / PG_DETECTOR_DISABLE):
 - ``ml-v9``   wraps ``privai_model.ml_span.runtime.MLSpanDetector`` (mmBERT token
   classification, models/span-detector-v9).
 - ``ml-qwen`` wraps ``privai_model.qwen_span.wrapper.QwenSecretScanner``
-  (Qwen2.5-Coder LoRA, models/qwen-span-v2).
+  (Qwen2.5-Coder LoRA, models/qwen-span-v3).
 
 Both only call the model repository's public entry points, so a new model
 version is picked up with ``git pull`` in that repository and a PromptGuard
@@ -146,7 +146,7 @@ class MLV9Adapter(_ModelRepoAdapter):
 
 
 class QwenAdapter(_ModelRepoAdapter):
-    """Qwen2.5-Coder LoRA span detector (models/qwen-span-v2) via QwenSecretScanner.
+    """Qwen2.5-Coder LoRA span detector (models/qwen-span-v3) via QwenSecretScanner.
 
     The scanner refuses inputs over its token limit, so long text is split on
     line boundaries into chunks that fit, with ``overlap_lines`` lines repeated
@@ -158,7 +158,7 @@ class QwenAdapter(_ModelRepoAdapter):
 
     def __init__(self, name: str, options: Mapping[str, Any], config_dir: Path, *, factory: Callable[..., Any] | None = None) -> None:
         super().__init__(name, options, config_dir)
-        bundle = _resolve(self.repository, options.get("bundle"), "models/qwen-span-v2")
+        bundle = _resolve(self.repository, options.get("bundle"), "models/qwen-span-v3")
         if factory is None:
             if not _real_weights(bundle / "adapter_model.safetensors"):
                 raise AdapterUnavailable("Qwen adapter weights missing (run git lfs pull in the model repository)")
@@ -176,7 +176,7 @@ class QwenAdapter(_ModelRepoAdapter):
         self.max_chunks = max(1, int(options.get("max_chunks", 8)))
         self.overlap_lines = max(0, int(options.get("overlap_lines", 1)))
         self.limit = int(getattr(self.model, "max_input_tokens", 4096))
-        self.model_id = _bundle_id(bundle / "qwen_bundle.json", "qwen-span-v2")
+        self.model_id = _bundle_id(bundle / "qwen_bundle.json", "qwen-span-v3")
         self.version = self.model_id
 
     def _fits(self, text: str) -> bool:
