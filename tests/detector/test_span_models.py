@@ -160,6 +160,25 @@ class SpanModelTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.qwen(limit=50).scan("token " + "x" * 400)
 
+    def test_qwen_too_long_can_skip_instead_of_failing(self) -> None:
+        many = "".join(f"token line {i:03d} padding padding\n" for i in range(200))
+        adapter = self.qwen({"max_chunks": 2, "too_long": "skip"}, values=[SECRET], limit=200)
+        self.assertEqual(adapter.scan(many), [])
+        self.assertEqual(self.qwen({"too_long": "skip"}, limit=50).scan("token " + "x" * 400), [])
+        with self.assertRaises(ValueError):
+            self.qwen({"too_long": "maybe"})
+
+    def test_max_text_chars_leaves_long_texts_to_the_others(self) -> None:
+        adapter = self.qwen({"max_text_chars": 100}, values=[SECRET])
+        self.assertEqual(adapter.scan(f"token {SECRET} " + "x" * 200), [])
+        self.assertEqual(adapter.model.calls, [])
+        self.assertEqual(len(adapter.scan(f"token {SECRET}")), 1)
+
+    def test_timeout_override_from_environment(self) -> None:
+        with mock.patch.dict(os.environ, {"PG_ML_TIMEOUT_SECONDS": "30"}):
+            self.assertEqual(self.v9().timeout, 30.0)
+        self.assertEqual(self.v9().timeout, None)
+
     def test_qwen_cue_gate_skips_model(self) -> None:
         adapter = self.qwen({"gate": "cue"}, values=[SECRET])
         self.assertEqual(adapter.scan(f"hello world {SECRET}"), [])

@@ -35,6 +35,7 @@ cd sample-protected-project
 
 - ML 모듈이 켜지면 worker 준비 대기 시간이 자동으로 180초가 된다. Qwen이 켜지면 detector 응답 대기 시간도 30초가 된다. `--readiness-timeout-ms`, `--detector-timeout-ms`로 직접 정할 수 있다.
 - 시작할 때 `Detectors: ...` 줄에 실제로 켜지는 모듈이 나온다. 이름을 잘못 쓰거나 전부 끄면 시작하지 않는다.
+- 모델 두 개를 같이 켜면 CPU를 나눠 써서 한 번 호출이 혼자일 때보다 오래 걸린다. `PG_ML_TIMEOUT_SECONDS`가 있으면 모든 모델 모듈의 `timeout_seconds`를 덮어쓴다.
 - 같은 동작을 환경변수(`PG_DETECTOR_ENABLE`, `PG_DETECTOR_DISABLE`, `PG_DETECTOR_CANDIDATE_POLICY`, `PG_READINESS_TIMEOUT_MS`, `PG_DETECTOR_TIMEOUT_MS`)로도 할 수 있다. 옵션이 환경변수보다 우선한다.
 
 `promptguard status`의 detector 정보에서 `adapters`(켜진 모듈)와 `skipped`(건너뛴 모듈과 이유)를 확인한다.
@@ -49,6 +50,8 @@ cd sample-protected-project
 | `threshold` | 둘 다 | 모델 번들의 값 | 점수 cutoff. 비우면 민준이 validation에서 고정한 값 |
 | `gate` | 둘 다 | `always` / `cue` | `cue`면 password, token, 비밀번호 같은 단어가 **단어 단위로** 있는 텍스트만 모델에 보낸다("tests passed"는 해당 없음) |
 | `timeout_seconds` | 둘 다 | 4 / 25 | 넘기면 오류로 처리해 요청을 막는다 |
+| `max_text_chars` | 둘 다 | 없음 / 12000 (Qwen) | 이보다 긴 텍스트는 이 모델이 보지 않고 다른 모듈에 맡긴다(cue 게이트와 같은 방식) |
+| `too_long` | Qwen | `fail` (코드 기본) / `skip` (detector.json) | 줄 하나가 입력 한도를 넘거나 청크가 `max_chunks`보다 많을 때: `fail`이면 오류로 요청을 막고, `skip`이면 그 텍스트를 다른 모듈에 맡긴다. 2026-10-30 시연 리허설에서 Claude Code의 긴 시스템 텍스트 때문에 Qwen이 실패해 요청이 막혀 `skip`으로 정했다 |
 | `min_value_length` | 둘 다 | 6 | 모델이 찍은 스팬이 이보다 짧거나 평범한 영어 단어(of, by, option 등)면 버린다. 2026-10-30 시연 중 ml-v9가 "of", "by"를 비밀로 찍은 오탐 때문에 넣었다. 6자 미만 비밀번호는 모델로는 가리지 않는다(다른 모듈은 여전히 검사) |
 | `max_chunks`, `overlap_lines` | Qwen | 8, 1 | 입력 한도(4,096 토큰)를 넘는 텍스트를 줄 단위로 나누는 방식 |
 

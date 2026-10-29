@@ -20,6 +20,7 @@ treat as a blocked scan. Nothing here logs or returns candidate text.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import threading
@@ -70,8 +71,20 @@ class _ModelRepoAdapter(DetectorAdapter):
         if gate not in {"always", "cue"}:
             raise ValueError("gate must be 'always' or 'cue'")
         self.gate = gate
-        timeout = options.get("timeout_seconds")
+        # PG_ML_TIMEOUT_SECONDS overrides every model adapter's timeout, for a run where they share the CPU
+        # (v9 and Qwen together) and a call takes longer than it does alone.
+        timeout = os.environ.get("PG_ML_TIMEOUT_SECONDS") or options.get("timeout_seconds")
         self.timeout = float(timeout) if timeout is not None else None
+        # Texts longer than max_text_chars are left to the other detectors, the same way the cue gate leaves texts
+        # without a cue. too_long says what happens when a text still does not fit the model (Qwen: a line over
+        # the input limit, or more chunks than max_chunks): "fail" (default) raises and the request is blocked,
+        # "skip" leaves that text to the other detectors.
+        limit = options.get("max_text_chars")
+        self.max_text_chars = int(limit) if limit is not None else None
+        too_long = str(options.get("too_long", "fail"))
+        if too_long not in {"fail", "skip"}:
+            raise ValueError("too_long must be 'fail' or 'skip'")
+        self.too_long = too_long
         self.strong_threshold = float(options.get("strong_threshold", 0.99))
         # A model span shorter than this, or one that is an ordinary English word ("of", "by": ml-v9 flagged both
         # in a live demo session), is not a credential value and is dropped before it can mask anything.
@@ -93,6 +106,8 @@ class _ModelRepoAdapter(DetectorAdapter):
         if not text.strip():
             return []
         if self.gate == "cue" and not CUE.search(text):
+            return []
+        if self.max_text_chars is not None and len(text) > self.max_text_chars:
             return []
         spans = self._call(lambda: self._spans(text))
         findings = []
@@ -182,7 +197,8 @@ class QwenAdapter(_ModelRepoAdapter):
     def _fits(self, text: str) -> bool:
         return self.model.detector.prompt_length(text) <= self.limit
 
-    def _chunks(self, text: str) -> list[tuple[int, str]]:
+    def _chunks(self, text: str) -> list[tuple[int, str]] | None:
+        """The text cut at line ends into pieces that fit the model, or None when it cannot be (too_long: skip)."""
         if self._fits(text):
             return [(0, text)]
         lines, offset = [], 0
@@ -195,11 +211,15 @@ class QwenAdapter(_ModelRepoAdapter):
             start = index
             end = index + 1
             if not self._fits(lines[start][1]):
+                if self.too_long == "skip":
+                    return None
                 raise RuntimeError(f"{self.name}: a single line exceeds the model input limit")
             while end < len(lines) and self._fits("".join(line for _, line in lines[start:end + 1])):
                 end += 1
             chunks.append((lines[start][0], "".join(line for _, line in lines[start:end])))
             if len(chunks) > self.max_chunks:
+                if self.too_long == "skip":
+                    return None
                 raise RuntimeError(f"{self.name}: input needs more than {self.max_chunks} chunks")
             if end >= len(lines):
                 break
@@ -208,7 +228,7 @@ class QwenAdapter(_ModelRepoAdapter):
 
     def _spans(self, text: str) -> list[tuple[int, int, float]]:
         found: dict[tuple[int, int], float] = {}
-        for base, chunk in self._chunks(text):
+        for base, chunk in self._chunks(text) or []:
             result = self.model.scan(chunk)
             if result.status != "ok":
                 raise RuntimeError(f"{self.name}: scan failed ({result.error})")
