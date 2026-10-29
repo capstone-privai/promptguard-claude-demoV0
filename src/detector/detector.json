@@ -67,7 +67,9 @@
         "gate": "cue",
         "timeout_seconds": 25,
         "max_chunks": 8,
-        "overlap_lines": 1
+        "overlap_lines": 1,
+        "max_text_chars": 12000,
+        "too_long": "skip"
       }
     }
   ]
