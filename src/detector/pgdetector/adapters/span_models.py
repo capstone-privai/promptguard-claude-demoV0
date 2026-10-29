@@ -32,9 +32,13 @@ from ..adapter import AdapterUnavailable, DetectorAdapter, RawFinding
 DEFAULT_REPOSITORY = "../../../promptguard-model"
 # Words that suggest a credential is nearby. Used only when an adapter sets
 # "gate": "cue" to skip slow models on text with no such word.
+# Whole words only (snake_case and camelCase parts count): "passed" or "bypass"
+# must not wake a model that costs seconds per input.
 CUE = re.compile(
-    r"(?i)pass(?:word|wd|phrase)?|pwd|secret|token|api[_-]?key|auth|credential|bearer|private[ _-]?key"
-    r"|access[_-]?key|비밀번호|비번|토큰|인증|시크릿"
+    r"(?i)(?<![a-z])(?:pass(?:word|wd|phrase)?|pwd|secrets?|tokens?|api[_-]?keys?|auth(?:orization|orize|enticat(?:e|ion|ed)|token)?|credentials?"
+    r"|bearer|private[ _-]?key|access[_-]?key)(?![a-z])"
+    r"|(?<=[a-z])(?:Password|Passwd|Secret|Token|ApiKey|Auth)"
+    r"|비밀번호|비번|토큰|인증|시크릿"
 )
 
 

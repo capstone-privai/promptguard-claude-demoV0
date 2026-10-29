@@ -157,6 +157,15 @@ class SpanModelTests(unittest.TestCase):
         self.assertEqual(adapter.model.calls, [])
         self.assertEqual(len(adapter.scan(f"비밀번호는 {SECRET}")), 1)
 
+    def test_cue_gate_word_boundaries(self) -> None:
+        from pgdetector.adapters.span_models import CUE
+        for text in ("48 tests passed", "bypass the cache", "compass heading", "authoring notes", "tokenizer warmup done"):
+            with self.subTest(text=text):
+                self.assertIsNone(CUE.search(text))
+        for text in ("password=", "DB_PASSWORD", "api_key:", "Authorization: Bearer", "getApiToken(", "auth token is", "비밀번호는", "client secrets"):
+            with self.subTest(text=text):
+                self.assertIsNotNone(CUE.search(text))
+
     def test_qwen_passes_device_and_threshold(self) -> None:
         adapter = self.qwen({"device": "cpu", "threshold": 0.5})
         self.assertEqual(adapter.model.kwargs, {"device": "cpu", "local_files_only": False, "threshold": 0.5})
