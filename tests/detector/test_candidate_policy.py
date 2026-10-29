@@ -124,11 +124,11 @@ class CandidatePolicyTests(unittest.TestCase):
             finally:
                 sys.path.remove(str(Path(__file__).parent))
 
-    def test_shipped_config_is_union_without_ml(self) -> None:
+    def test_shipped_config_is_union_with_models_off_by_default(self) -> None:
         config = json.loads((ROOT / "src" / "detector" / "detector.json").read_text(encoding="utf-8"))
         self.assertEqual("union", config["candidate_policy"])
-        names = [entry["name"] for entry in config["adapters"]]
-        self.assertEqual(["credsweeper", "gitleaks", "promptguard-rules", "shell-aware"], names)
+        enabled = [entry["name"] for entry in config["adapters"] if entry.get("enabled", True)]
+        self.assertEqual(["credsweeper", "gitleaks", "promptguard-rules", "shell-aware"], enabled)
 
     def test_masked_fixtures_do_not_retrigger_in_house_adapters(self) -> None:
         """Final Guard rescans masked text with the same union; placeholders must stay quiet."""

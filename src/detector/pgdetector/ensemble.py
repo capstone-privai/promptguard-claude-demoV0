@@ -207,6 +207,10 @@ def _decorate_candidates(candidates: list[dict[str, Any]], protected: list[dict[
         candidate.pop("value_hash", None)
 
 
+def _name_set(value: str | None) -> set[str]:
+    return {part.strip() for part in (value or "").split(",") if part.strip()}
+
+
 def adapter_class(kind: str) -> type[DetectorAdapter]:
     """Built-in adapter by short name, or any ``package.module:Class`` on sys.path."""
     target = ADAPTER_TYPES.get(kind, kind)
@@ -225,7 +229,9 @@ def load_detector(config_path: str | Path | None = None, consensus: Any = None) 
     ``PG_DETECTOR_CONFIG`` and ``PG_DETECTOR_CONSENSUS`` override the config file
     and its consensus policy, and ``PG_DETECTOR_CANDIDATE_POLICY`` overrides
     ``candidate_policy`` ("union" masks what any adapter finds; "majority" keeps
-    the original vote and ignores candidate-only adapters for protection). An
+    the original vote and ignores candidate-only adapters for protection).
+    ``PG_DETECTOR_ENABLE`` / ``PG_DETECTOR_DISABLE`` (comma-separated adapter
+    names) switch entries on or off without editing the file; DISABLE wins. An
     adapter whose tool is missing aborts startup unless its entry sets
     ``"required": false``, in which case it is skipped and does not count as a
     voter.
@@ -236,8 +242,15 @@ def load_detector(config_path: str | Path | None = None, consensus: Any = None) 
     adapters: list[DetectorAdapter] = []
     candidate_only: list[str] = []
     skipped: list[dict[str, str]] = []
+    force_on = _name_set(os.environ.get("PG_DETECTOR_ENABLE"))
+    force_off = _name_set(os.environ.get("PG_DETECTOR_DISABLE"))
     for entry in config.get("adapters", []):
-        if not entry.get("enabled", True):
+        enabled = entry.get("enabled", True)
+        if entry["name"] in force_on:
+            enabled = True
+        if entry["name"] in force_off:
+            enabled = False
+        if not enabled:
             continue
         name = entry["name"]
         try:

@@ -169,7 +169,7 @@ detector는 여러 모듈을 **adapter**로 감싸 같은 인터페이스(`name`
   - `"majority"`: 기존 CredSweeper/Gitleaks/custom rules 다수결만 사용합니다. `candidate_only` 모듈은 투표하지 않습니다. 이전 동작과 같아서 비교나 롤백에 씁니다.
 - `candidates`: 정책과 상관없이 모든 모듈의 합집합. 겹치는 span은 하나로 합치고, 어느 모듈이 왜 잡았는지(provenance)를 raw 값 없이 남깁니다.
 
-`PG_DETECTOR_CANDIDATE_POLICY=majority`로 실행하면 설정 파일을 고치지 않고 기존 동작으로 돌아갑니다.
+`PG_DETECTOR_CANDIDATE_POLICY=majority`로 실행하면 설정 파일을 고치지 않고 기존 동작으로 돌아갑니다. 팀 ML 모듈은 `PG_DETECTOR_ENABLE=ml-v9` 처럼 켭니다. 준비와 옵션은 [ML adapter 문서](docs/ML_ADAPTERS.md)를 참고하세요.
 
 | adapter 이름 | 종류 | 구현 |
 | --- | --- | --- |
@@ -177,6 +177,8 @@ detector는 여러 모듈을 **adapter**로 감싸 같은 인터페이스(`name`
 | `gitleaks` | 오픈소스 (Go 바이너리, `gitleaks stdin`) | `src/detector/pgdetector/adapters/gitleaks.py` |
 | `promptguard-rules` | 직접 만든 모듈 (순수 Python 정규식/키 분류) | `src/detector/pgdetector/adapters/patterns.py` |
 | `shell-aware` | command/source/sink 의미 기반 candidate generator | `src/detector/pgdetector/adapters/shell_aware.py` |
+| `ml-v9` | 팀 mmBERT span 모델 (기본 꺼짐) | `src/detector/pgdetector/adapters/span_models.py` |
+| `ml-qwen` | 팀 Qwen2.5-Coder LoRA span 모델 (기본 꺼짐) | `src/detector/pgdetector/adapters/span_models.py` |
 
 모듈 목록과 정책은 `src/detector/detector.json`에서 지정합니다.
 
