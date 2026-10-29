@@ -8,6 +8,9 @@ const PLACEHOLDER_PATTERN = /\[[A-Z0-9_]+_\d+\]/g
 // Tools that execute locally. Model-bound tools (Agent, WebFetch, ...) never get raw values.
 const RESTORE_TOOLS = new Set(['Bash', 'PowerShell', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Grep'])
 const TOOL_META_KEYS = new Set(['tool', 'tool_use_id'])
+// session.append doors whose content no earlier hook sanitized. `command` is `!` shell mode:
+// its <bash-input>/<bash-stdout> rows skip prompt.submit and tool.call entirely.
+const UNSANITIZED_DOORS = new Set(['command', 'tool-message', 'delivery', 'hook-context', 'note', 'notice'])
 const auditRows = []
 let detectorQueue = Promise.resolve()
 let auditQueue = Promise.resolve()
@@ -92,10 +95,31 @@ function redactText(text, findings) {
   return out
 }
 
+// The pgdetector MCP server connects in the background after the session starts, and until then
+// $.mcp.call throws. A throwing hook is skipped by the engine, so the first hooks would pass raw
+// text. Wait for the first connection (bounded); after that, a throw fails at once as before.
+const CONNECT_RETRY_MS = 250
+let detectorConnected = false
+
+async function callDetector($, entries) {
+  const wait = Number(await $.env.get('PG_MOD_CONNECT_WAIT_MS') ?? 15000)
+  const deadline = Date.now() + (Number.isFinite(wait) && wait >= 0 ? wait : 15000)
+  for (;;) {
+    try {
+      const response = await $.mcp.call('pgdetector', 'scan_batch', { items: entries })
+      detectorConnected = true
+      return response
+    } catch (error) {
+      if (detectorConnected || Date.now() >= deadline) throw error
+      await new Promise(resolve => setTimeout(resolve, CONNECT_RETRY_MS))
+    }
+  }
+}
+
 async function scanBatch($, entries) {
   if (!entries.length) return { items: [], latencyMs: 0 }
   const started = Date.now()
-  const operation = detectorQueue.then(() => $.mcp.call('pgdetector', 'scan_batch', { items: entries }))
+  const operation = detectorQueue.then(() => callDetector($, entries))
   detectorQueue = operation.catch(() => {})
   const response = await operation
   if (!response || response.isError === true || !Array.isArray(response.content)) throw new Error('PromptGuard detector bridge failure')
@@ -210,6 +234,25 @@ function auditTool(tool) {
   return tool ? 'Other tool' : undefined
 }
 
+// Only text blocks and a tool_result's text are rewritable; every other block passes through.
+function rowTexts(content) {
+  return content.map(block => {
+    if (block?.type === 'text' && typeof block.text === 'string') return block.text
+    if (block?.type === 'tool_result' && typeof block.content === 'string') return block.content
+    if (block?.type === 'tool_result' && Array.isArray(block.content)) return block.content.map(item => item?.type === 'text' && typeof item.text === 'string' ? item.text : null)
+    return null
+  })
+}
+
+function rebuildRow(content, texts) {
+  return content.map((block, index) => {
+    if (block?.type === 'text' && typeof block.text === 'string') return { ...block, text: texts[index] }
+    if (block?.type === 'tool_result' && typeof block.content === 'string') return { ...block, content: texts[index] }
+    if (block?.type === 'tool_result' && Array.isArray(block.content)) return { ...block, content: block.content.map((item, i) => texts[index][i] === null ? item : { ...item, text: texts[index][i] }) }
+    return block
+  })
+}
+
 function toolSource(e, isError) {
   if (e.tool === 'Read') return 'read_result'
   if (e.tool === 'Grep') return 'grep'
@@ -281,6 +324,17 @@ export function register(on) {
     if (result.skip !== undefined) return result
     const sanitized = (await sanitizeAndAudit($, result.messages, 'history', { hook: 'session.compact' })).map(message => { const { handle, ...built } = message; return built })
     return { ...result, messages: sanitized }
+  })
+
+  // Rewrites the row before it is stored, so neither the model nor the transcript file sees raw values.
+  on('session.append', async ($, e, next) => {
+    const content = e.message?.content
+    if (!UNSANITIZED_DOORS.has(e.door) || !Array.isArray(content)) return next(e)
+    const texts = rowTexts(content)
+    if (!texts.some(text => text !== null)) return next(e)
+    const source = e.door === 'command' ? 'user_command' : 'history'
+    const sanitized = await sanitizeAndAudit($, texts, source, { hook: 'session.append' })
+    return next({ ...e, message: { ...e.message, content: rebuildRow(content, sanitized) } })
   })
 
   on('turn.step', async function* ($, e, next) {

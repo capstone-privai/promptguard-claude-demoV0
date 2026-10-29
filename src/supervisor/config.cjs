@@ -178,7 +178,7 @@ function pythonVersion(command, prefix) {
   })
   if (result.error || result.status !== 0) return null
   const version = String(result.stdout || '').trim()
-  return /^3\.12\.\d+$/.test(version) ? version : null
+  return /^3\.(12|14)\.\d+$/.test(version) ? version : null
 }
 
 function resolvePython(config) {
@@ -186,15 +186,15 @@ function resolvePython(config) {
   if (config.pythonBinary !== 'auto') candidates.push({ command: config.pythonBinary, prefix: [] })
   else {
     candidates.push({ command: path.join(PROJECT_ROOT, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'), prefix: [] })
-    if (process.platform === 'win32') candidates.push({ command: 'py', prefix: ['-3.12'] })
-    candidates.push({ command: 'python3.12', prefix: [] }, { command: 'python3', prefix: [] }, { command: 'python', prefix: [] })
+    if (process.platform === 'win32') candidates.push({ command: 'py', prefix: ['-3.12'] }, { command: 'py', prefix: ['-3.14'] })
+    candidates.push({ command: 'python3.12', prefix: [] }, { command: 'python3.14', prefix: [] }, { command: 'python3', prefix: [] }, { command: 'python', prefix: [] })
   }
 
   for (const candidate of candidates) {
     const version = pythonVersion(candidate.command, candidate.prefix)
     if (version) return { ...candidate, version }
   }
-  throw new ConfigError('Python 3.12 is unavailable. Run the PromptGuard installer first.')
+  throw new ConfigError('Python 3.12 or 3.14 is unavailable. Run the PromptGuard installer first.')
 }
 
 module.exports = {

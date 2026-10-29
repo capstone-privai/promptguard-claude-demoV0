@@ -1,5 +1,5 @@
 // E2E: does a placeholder restored in tool.call reach later provider requests?
-// Runs the real Claude Code CLI with the Native Mod and the CredSweeper worker against a
+// Runs the real Claude Code CLI with the Native Mod and the detector ensemble worker against a
 // fake Anthropic API that records every request and plays the model's part.
 // Run from the repository root after install: node tests/e2e/restore_history.mjs
 import { spawn } from 'node:child_process'
@@ -100,7 +100,7 @@ async function startDetector() {
     await new Promise(r => setTimeout(r, 100))
   }
   child.kill()
-  throw new Error('CredSweeper worker failed to start')
+  throw new Error('Detector worker failed to start')
 }
 
 function bashBlocks(body) {

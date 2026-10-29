@@ -109,3 +109,88 @@ test('a denied call does not echo the restored raw value', async () => {
 
   assert.equal(result.deny, 'blocked: echo [PASSWORD_1]')
 })
+
+// `!` shell-mode rows reach the session only through session.append (door `command`).
+async function append(hooks, $, door, content) {
+  let stored
+  await hooks['session.append']($, { door, origin: { kind: 'unclassified' }, uuid: 'u1', message: { type: 'user', role: 'user', content } }, e => { stored = e; return {} })
+  return stored
+}
+
+test('shell-mode input and output are masked before the row is stored or sent', async () => {
+  const { hooks, $ } = await load()
+  const input = await append(hooks, $, 'command', [{ type: 'text', text: `<bash-input>echo DB_PASSWORD=${PASSWORD}</bash-input>` }])
+  const output = await append(hooks, $, 'command', [{ type: 'text', text: `<bash-stdout>DB_PASSWORD=${PASSWORD}\nAPI_TOKEN=${TOKEN}</bash-stdout><bash-stderr></bash-stderr>` }])
+
+  assert.equal(input.message.content[0].text, '<bash-input>echo DB_PASSWORD=[PASSWORD_1]</bash-input>')
+  assert.equal(output.message.content[0].text, '<bash-stdout>DB_PASSWORD=[PASSWORD_1]\nAPI_TOKEN=[TOKEN_1]</bash-stdout><bash-stderr></bash-stderr>')
+  assert.equal(output.door, 'command')
+  assert.equal(output.uuid, 'u1')
+
+  // The same placeholder still restores for a later model-issued Bash call.
+  let executed
+  await hooks['tool.call']($, { tool: 'Bash', tool_use_id: 't6', command: 'psql -p [PASSWORD_1]' }, e => { executed = e; return { result: 'ok' } })
+  assert.equal(executed.command, `psql -p ${PASSWORD}`)
+})
+
+test('tool_result text in an unsanitized row is masked; non-text blocks pass through', async () => {
+  const { hooks, $ } = await load()
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }
+  const stored = await append(hooks, $, 'tool-message', [
+    { type: 'tool_result', tool_use_id: 'x', content: [{ type: 'text', text: `TOKEN=${TOKEN}` }, image] },
+    { type: 'tool_result', tool_use_id: 'y', content: `PASS=${PASSWORD}` },
+  ])
+  assert.equal(stored.message.content[0].content[0].text, 'TOKEN=[TOKEN_1]')
+  assert.deepEqual(stored.message.content[0].content[1], image)
+  assert.equal(stored.message.content[1].content, 'PASS=[PASSWORD_1]')
+})
+
+test('rows already sanitized by other hooks are not rescanned', async () => {
+  const { hooks, $ } = await load()
+  let scans = 0
+  const call = $.mcp.call
+  $.mcp.call = async (...args) => { scans++; return call(...args) }
+  for (const door of ['prompt', 'tool-result', 'response', 'attachment', 'compaction']) {
+    const stored = await append(hooks, $, door, [{ type: 'text', text: `DB_PASSWORD=${PASSWORD}` }])
+    assert.equal(stored.message.content[0].text, `DB_PASSWORD=${PASSWORD}`)
+  }
+  assert.equal(scans, 0)
+})
+
+test('a detector failure on a shell-mode row fails closed without storing it', async () => {
+  const { hooks, $ } = await load({ PG_MOD_CONNECT_WAIT_MS: '0' })
+  $.mcp.call = async () => { throw new Error('down') }
+  let stored = false
+  await assert.rejects(hooks['session.append']($, { door: 'command', origin: { kind: 'unclassified' }, uuid: 'u2', message: { type: 'user', role: 'user', content: [{ type: 'text', text: `DB_PASSWORD=${PASSWORD}` }] } }, () => { stored = true; return {} }), /PromptGuard detector failure/)
+  assert.equal(stored, false)
+})
+
+// The engine connects the pgdetector MCP server after the session starts; early hooks must wait, not be skipped.
+const notConnected = () => new Error('$.mcp.call: no connected MCP tool "scan_batch" on a server named "pgdetector"')
+
+test('hooks that run before the detector connects wait for it instead of failing', async () => {
+  const { hooks, $ } = await load()
+  const call = $.mcp.call
+  let attempts = 0
+  $.mcp.call = async (...args) => { if (++attempts < 3) throw notConnected(); return call(...args) }
+  const stored = await append(hooks, $, 'command', [{ type: 'text', text: `<bash-stdout>DB_PASSWORD=${PASSWORD}</bash-stdout>` }])
+  assert.equal(attempts, 3)
+  assert.equal(stored.message.content[0].text, '<bash-stdout>DB_PASSWORD=[PASSWORD_1]</bash-stdout>')
+})
+
+test('a detector that never connects fails closed after the bounded wait', async () => {
+  const { hooks, $ } = await load({ PG_MOD_CONNECT_WAIT_MS: '300' })
+  $.mcp.call = async () => { throw notConnected() }
+  const started = Date.now()
+  await assert.rejects(maskPrompt(hooks, $, `DB_PASSWORD=${PASSWORD}`), /PromptGuard detector failure/)
+  assert.ok(Date.now() - started >= 250)
+})
+
+test('once connected, a later detector failure fails at once without waiting', async () => {
+  const { hooks, $ } = await load()
+  await maskPrompt(hooks, $, 'hello')
+  $.mcp.call = async () => { throw new Error('down') }
+  const started = Date.now()
+  await assert.rejects(maskPrompt(hooks, $, `DB_PASSWORD=${PASSWORD}`), /PromptGuard detector failure/)
+  assert.ok(Date.now() - started < 1000)
+})
