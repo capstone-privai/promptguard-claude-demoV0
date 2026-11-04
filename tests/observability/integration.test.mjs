@@ -64,7 +64,7 @@ test('real CredSweeper -> Native Mod -> production Final Guard SAFE/BLOCKED and 
     guard = await launch(process.execPath, ['src/guard/final-guard.cjs'], { PG_GUARD_PORT: String(guardPort), PG_GUARD_DETECTOR_URL: detectorUrl, PG_UPSTREAM_BASE_URL: `http://127.0.0.1:${upstreamPort}`, PG_AUDIT_PATH: guardAudit, PG_SESSION_HASH: 'b'.repeat(64) }, 'READY')
     const callbacks = new Map()
     const { register } = await import(`../../src/native-mod/hooks/register.mjs?integration=${Date.now()}`)
-    register((name, fn) => callbacks.set(name, fn))
+    register((name, fn) => { callbacks.set(name, fn); return { catch() {} } })
     let audit = []
     const $ = {
       env: { get: async key => ({ PG_MOD_AUDIT: 'memory', PG_SESSION_HASH: 'b'.repeat(64) }[key]) },

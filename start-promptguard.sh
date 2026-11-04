@@ -102,8 +102,10 @@ for skipped in health["skipped"]:
     print("Detector: skipped %s (%s)" % (skipped["name"], skipped["reason"]))' || true
 printf 'WARNING: this launcher is Mod-only; a provider-bound Final Guard is not included.\n' >&2
 
+# Pre-allow the Mod's detector tool: a denied permission prompt would make every scan fail, and the
+# Mod would then block all text. --allowedTools takes a list, so another option must follow it.
 set +e
-claude --plugin-dir "$ROOT/src/native-mod" --mcp-config "$MCP_CONFIG" "$@"
+claude --allowedTools mcp__pgdetector__scan_batch --plugin-dir "$ROOT/src/native-mod" --mcp-config "$MCP_CONFIG" "$@"
 CLAUDE_STATUS=$?
 set -e
 exit "$CLAUDE_STATUS"

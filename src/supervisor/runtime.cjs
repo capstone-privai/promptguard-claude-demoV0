@@ -344,7 +344,9 @@ class RuntimeSupervisor {
     environment.PG_RUNTIME_ACTIVE = '1'
     addNoProxy(environment)
 
-    const args = ['--plugin-dir', paths.plugin, '--mcp-config', paths.mcpConfig, ...this.claudeArgs]
+    // Pre-allow the Mod's detector tool: a denied permission prompt would make every scan fail, and
+    // the Mod would then block all text. --allowedTools takes a list, so another option follows it.
+    const args = ['--allowedTools', 'mcp__pgdetector__scan_batch', '--plugin-dir', paths.plugin, '--mcp-config', paths.mcpConfig, ...this.claudeArgs]
     const child = spawn(this.config.claudeBinary, args, {
       cwd: process.cwd(),
       env: environment,

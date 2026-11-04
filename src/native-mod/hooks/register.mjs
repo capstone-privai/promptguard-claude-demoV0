@@ -96,32 +96,63 @@ function redactText(text, findings) {
 }
 
 // The pgdetector MCP server connects in the background after the session starts, and until then
-// $.mcp.call throws. A throwing hook is skipped by the engine, so the first hooks would pass raw
-// text. Wait for the first connection (bounded); after that, a throw fails at once as before.
+// $.mcp.call throws. Failing then would block the first prompt for no reason, so wait for the first
+// connection (bounded); after that, a throw fails at once. Either way a failure blocks (BLOCKED_TEXT).
+//
+// The wait is one window for the whole session, from the first call, not one per hook: a denied
+// permission also throws, and per-hook windows queued behind one another (detectorQueue) outran
+// the hook budget (HookBudget.ms, 10s, which counts these timers). Claude Code 2.1.291 then unloaded
+// the whole Mod as "a runaway plugin" for ignoring next.signal, and later text went out unscanned.
+// So every wait also stops on the hook's signal; the hook's .catch then blocks in its place. A
+// PG_MOD_CONNECT_WAIT_MS past the budget is cut there.
 const CONNECT_RETRY_MS = 250
 let detectorConnected = false
+let connectDeadline = null
 
-async function callDetector($, entries) {
-  const wait = Number(await $.env.get('PG_MOD_CONNECT_WAIT_MS') ?? 15000)
-  const deadline = Date.now() + (Number.isFinite(wait) && wait >= 0 ? wait : 15000)
+class DetectorAbandoned extends Error {}
+
+function pause(ms, signal) {
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, ms)
+    signal?.addEventListener('abort', () => { clearTimeout(timer); resolve() }, { once: true })
+  })
+}
+
+// Settles with `promise`, or rejects as soon as `signal` aborts.
+function untilAborted(promise, signal) {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(new DetectorAbandoned('PromptGuard detector call abandoned'))
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(new DetectorAbandoned('PromptGuard detector call abandoned'))
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
+  })
+}
+
+async function callDetector($, entries, signal) {
+  if (connectDeadline === null) {
+    const wait = Number(await $.env.get('PG_MOD_CONNECT_WAIT_MS') ?? 15000)
+    connectDeadline = Date.now() + (Number.isFinite(wait) && wait >= 0 ? wait : 15000)
+  }
   for (;;) {
+    if (signal?.aborted) throw new DetectorAbandoned('PromptGuard detector call abandoned')
     try {
       const response = await $.mcp.call('pgdetector', 'scan_batch', { items: entries })
       detectorConnected = true
       return response
     } catch (error) {
-      if (detectorConnected || Date.now() >= deadline) throw error
-      await new Promise(resolve => setTimeout(resolve, CONNECT_RETRY_MS))
+      if (detectorConnected || Date.now() >= connectDeadline) throw error
+      await pause(CONNECT_RETRY_MS, signal)
     }
   }
 }
 
-async function scanBatch($, entries) {
+async function scanBatch($, entries, signal) {
   if (!entries.length) return { items: [], latencyMs: 0 }
   const started = Date.now()
-  const operation = detectorQueue.then(() => callDetector($, entries))
+  const operation = detectorQueue.then(() => callDetector($, entries, signal))
   detectorQueue = operation.catch(() => {})
-  const response = await operation
+  const response = await untilAborted(operation, signal)
   if (!response || response.isError === true || !Array.isArray(response.content)) throw new Error('PromptGuard detector bridge failure')
   const text = response.content.find(block => block?.type === 'text')?.text
   let value
@@ -166,9 +197,9 @@ function rebuild(value, byId, cursor = { value: 0 }) {
   return value
 }
 
-async function sanitize($, value, source) {
+async function sanitize($, value, source, signal) {
   const entries = collectStrings(value, source)
-  const scanned = await scanBatch($, entries)
+  const scanned = await scanBatch($, entries, signal)
   const byId = new Map(scanned.items.map(item => [item.id, item.findings]))
   const findings = scanned.items.flatMap(item => item.findings)
   const types = {}
@@ -217,16 +248,63 @@ async function appendAudit($, source, result, extra = {}) {
   await auditQueue
 }
 
-async function sanitizeAndAudit($, value, source, extra = {}) {
+// Fail closed. The engine skips a hook that throws, fails its budget or answers a wrong shape, and
+// runs what is beneath it with the ORIGINAL input, so a throw here would send raw text to the model
+// (Claude Code 2.1.291 types: EngineEventOf, "a guard fails open unless its registration carries a
+// `.catch`"). So a failed scan never throws: each text it could not check becomes BLOCKED_TEXT and
+// the hook answers normally. BLOCKED_TEXT is not placeholder-shaped, so tool.call never restores it.
+const BLOCKED_TEXT = '[PROMPTGUARD_BLOCKED: detector failure]'
+const blockStrings = value => mapStrings(value, () => BLOCKED_TEXT)
+
+// { ok: true, value } with the sanitized value, or { ok: false } after a raw-free failure audit row.
+// `signal` is the hook's next.signal; it never reaches the audit row.
+async function trySanitize($, value, source, { signal, ...extra } = {}) {
   try {
-    const result = await sanitize($, value, source)
+    const result = await sanitize($, value, source, signal)
     await appendAudit($, source, result, extra)
-    return result.value
+    return { ok: true, value: result.value }
   } catch (error) {
-    await appendFailureAudit($, source, error, extra)
-    throw new Error(error?.pgStage === 'sanitizer' ? 'PromptGuard sanitizer failure' : 'PromptGuard detector failure')
+    try { await appendFailureAudit($, source, error, extra) } catch { /* audit is best effort; blocking is not */ }
+    return { ok: false }
   }
 }
+
+// For values that hold only model-bound text (a string, or strings in arrays): every string of a
+// value that failed to scan becomes BLOCKED_TEXT. Pass `block` for values with non-text fields.
+async function sanitizeAndAudit($, value, source, extra = {}, block = blockStrings) {
+  const scanned = await trySanitize($, value, source, extra)
+  return scanned.ok ? scanned.value : block(value)
+}
+
+const blockInstructionFiles = files => files?.map(file => ({ ...file, content: BLOCKED_TEXT }))
+
+function blockRow(e) {
+  const content = e.message?.content
+  if (!UNSANITIZED_DOORS.has(e.door) || !Array.isArray(content)) return e
+  return { ...e, message: { ...e.message, content: rebuildRow(content, blockStrings(rowTexts(content))) } }
+}
+
+// Backstops for a hook that fails anyway (a bug, an overrun HookBudget): the engine runs the
+// registration's `.catch` in its place, and its answer stands. Each refuses what the hook guards.
+// `next` there replays a call the hook already made; it never runs beneath twice. The engine reads
+// `.catch(...)` statically too: its handler must be a function literal or a function's name.
+function catchPromptSubmit($, e, next) { return next.called ? next(e) : next({ ...e, text: BLOCKED_TEXT, context: blockStrings(e.context) }) }
+function catchPromptContext($, e, next) { return next.called ? next(e) : next({ ...e, blocks: e.blocks.map(block => ({ ...block, text: BLOCKED_TEXT })), instructionFiles: blockInstructionFiles(e.instructionFiles) }) }
+function catchPromptSection($, e, next) { return next.called || e.text === null ? next(e) : next({ ...e, text: BLOCKED_TEXT }) }
+// Sanitizes on the way up, so the replayed result is still raw: block every section's text.
+async function catchPromptCompose($, e, next) {
+  const result = await next(e)
+  return { ...result, sections: result.sections.map(section => ({ ...section, text: BLOCKED_TEXT })) }
+}
+function catchPromptAttachment($, e, next) { return next.called ? next(e) : next({ ...e, text: BLOCKED_TEXT }) }
+function catchSkillPrompt($, e, next) { return next.called ? next(e) : next({ ...e, text: BLOCKED_TEXT }) }
+function catchAgentSpawn($, e, next) { return next.called ? next(e) : next({ ...e, prompt: BLOCKED_TEXT, description: BLOCKED_TEXT }) }
+// Unscanned output never goes back, and a call the hook did not get to start never runs.
+function catchToolCall($, e, next) { return e.tool === 'mcp__pgdetector__scan_batch' ? next(e) : { deny: BLOCKED_TEXT } }
+function catchSessionCompact() { return { skip: BLOCKED_TEXT } }
+function catchSessionAppend($, e, next) { return next.called ? next(e) : next(blockRow(e)) }
+// Ends the response here: the rest of the stream is unscanned.
+async function* catchTurnStep() {}
 
 function auditTool(tool) {
   if (['Read', 'Grep', 'Bash', 'Agent'].includes(tool)) return tool
@@ -263,31 +341,34 @@ function toolSource(e, isError) {
 }
 
 export function register(on) {
+  // Each registration carries its `.catch` backstop (catch* above). The engine reads `on("<event>", hook)`
+  // statically, so every call keeps a literal event name.
   on('prompt.submit', async ($, e, next) => {
     if (await $.env.get('PG_MOD_FAILURE_MODE') === 'throw') throw new Error('synthetic Mod failure')
-    const text = await sanitizeAndAudit($, e.text, 'user_prompt', { hook: 'prompt.submit' })
-    const context = await sanitizeAndAudit($, e.context, 'history', { hook: 'prompt.submit' })
+    const text = await sanitizeAndAudit($, e.text, 'user_prompt', { signal: next.signal, hook: 'prompt.submit' })
+    const context = await sanitizeAndAudit($, e.context, 'history', { signal: next.signal, hook: 'prompt.submit' })
     return next({ ...e, text, context })
-  })
+  }).catch(catchPromptSubmit)
 
   on('prompt.context', async ($, e, next) => {
     const blocks = []
-    for (const block of e.blocks) blocks.push({ ...block, text: await sanitizeAndAudit($, block.text, 'claude_md', { hook: 'prompt.context' }) })
-    return next({ ...e, blocks, instructionFiles: (await sanitizeAndAudit($, e.instructionFiles, 'claude_md', { hook: 'prompt.context' })) })
-  })
+    for (const block of e.blocks) blocks.push({ ...block, text: await sanitizeAndAudit($, block.text, 'claude_md', { signal: next.signal, hook: 'prompt.context' }) })
+    // path and kind are scanned too, but on a failure only content is blocked: kind is an enum.
+    return next({ ...e, blocks, instructionFiles: (await sanitizeAndAudit($, e.instructionFiles, 'claude_md', { signal: next.signal, hook: 'prompt.context' }, blockInstructionFiles)) })
+  }).catch(catchPromptContext)
 
-  on('prompt.section', async ($, e, next) => e.text === null ? next(e) : next({ ...e, text: await sanitizeAndAudit($, e.text, 'automatic_context', { hook: 'prompt.section', name: e.name }) }))
+  on('prompt.section', async ($, e, next) => e.text === null ? next(e) : next({ ...e, text: await sanitizeAndAudit($, e.text, 'automatic_context', { signal: next.signal, hook: 'prompt.section', name: e.name }) })).catch(catchPromptSection)
 
   on('prompt.compose', async ($, e, next) => {
     const result = await next(e)
     const sections = []
-    for (const section of result.sections) sections.push({ ...section, text: await sanitizeAndAudit($, section.text, 'automatic_context', { hook: 'prompt.compose' }) })
+    for (const section of result.sections) sections.push({ ...section, text: await sanitizeAndAudit($, section.text, 'automatic_context', { signal: next.signal, hook: 'prompt.compose' }) })
     return { ...result, sections }
-  })
+  }).catch(catchPromptCompose)
 
-  on('prompt.attachment', async ($, e, next) => next({ ...e, text: await sanitizeAndAudit($, e.text, 'automatic_context', { hook: 'prompt.attachment', type: e.type }) }))
-  on('skill.prompt', async ($, e, next) => next({ ...e, text: await sanitizeAndAudit($, e.text, 'automatic_context', { hook: 'skill.prompt', skill: e.skill }) }))
-  on('agent.spawn', async ($, e, next) => next({ ...e, prompt: await sanitizeAndAudit($, e.prompt, 'subagent', { hook: 'agent.spawn' }), description: (await sanitizeAndAudit($, e.description, 'subagent', { hook: 'agent.spawn' })) }))
+  on('prompt.attachment', async ($, e, next) => next({ ...e, text: await sanitizeAndAudit($, e.text, 'automatic_context', { signal: next.signal, hook: 'prompt.attachment', type: e.type }) })).catch(catchPromptAttachment)
+  on('skill.prompt', async ($, e, next) => next({ ...e, text: await sanitizeAndAudit($, e.text, 'automatic_context', { signal: next.signal, hook: 'skill.prompt', skill: e.skill }) })).catch(catchSkillPrompt)
+  on('agent.spawn', async ($, e, next) => next({ ...e, prompt: await sanitizeAndAudit($, e.prompt, 'subagent', { signal: next.signal, hook: 'agent.spawn' }), description: (await sanitizeAndAudit($, e.description, 'subagent', { signal: next.signal, hook: 'agent.spawn' })) })).catch(catchAgentSpawn)
 
   on('tool.call', async ($, e, next) => {
     if (e.tool === 'mcp__pgdetector__scan_batch') return next(e)
@@ -310,21 +391,29 @@ export function register(on) {
     }
     const source = toolSource(e, result.isError === true)
     extra.is_error = result.isError === true
-    const sanitizedResult = { value: await sanitizeAndAudit($, result.result, source, extra) }
-    const sanitizedText = result.text === undefined ? undefined : await sanitizeAndAudit($, result.text, source, { ...extra, hook: 'tool.call.text' })
-    const sanitizedContext = await sanitizeAndAudit($, result.context, source, { ...extra, hook: 'tool.call.context' })
-    if (result.isError === true) return { deny: String(sanitizedText ?? sanitizedResult.value ?? 'Tool call failed') }
-    return { ...result, result: sanitizedResult.value, text: sanitizedText, context: sanitizedContext }
-  })
+    // A tool result is structured per tool, so a failed scan denies it whole: the model gets
+    // BLOCKED_TEXT as the tool's answer. The tool already ran; only its output is withheld.
+    const sanitizedResult = await trySanitize($, result.result, source, { ...extra, signal: next.signal })
+    const sanitizedText = result.text === undefined ? { ok: true, value: undefined } : await trySanitize($, result.text, source, { ...extra, signal: next.signal, hook: 'tool.call.text' })
+    const sanitizedContext = await trySanitize($, result.context, source, { ...extra, signal: next.signal, hook: 'tool.call.context' })
+    if (!sanitizedResult.ok || !sanitizedText.ok || !sanitizedContext.ok) return { deny: BLOCKED_TEXT }
+    if (result.isError === true) return { deny: String(sanitizedText.value ?? sanitizedResult.value ?? 'Tool call failed') }
+    return { ...result, result: sanitizedResult.value, text: sanitizedText.value, context: sanitizedContext.value }
+  }).catch(catchToolCall)
 
+  // A failed scan skips the compaction: the conversation stays as it is (its rows were sanitized as
+  // they were appended), and neither the compacting model nor the new history gets unscanned text.
   on('session.compact', async ($, e, next) => {
-    const messages = (await sanitizeAndAudit($, e.messages, 'history', { hook: 'session.compact' })).map(message => { const { handle, ...built } = message; return built })
-    const instructions = e.instructions === undefined ? undefined : await sanitizeAndAudit($, e.instructions, 'history', { hook: 'session.compact', trigger: e.trigger })
-    const result = await next({ ...e, messages, instructions })
+    const strip = messages => messages.map(message => { const { handle, ...built } = message; return built })
+    const messages = await trySanitize($, e.messages, 'history', { signal: next.signal, hook: 'session.compact' })
+    const instructions = e.instructions === undefined ? { ok: true, value: undefined } : await trySanitize($, e.instructions, 'history', { signal: next.signal, hook: 'session.compact', trigger: e.trigger })
+    if (!messages.ok || !instructions.ok) return { skip: BLOCKED_TEXT }
+    const result = await next({ ...e, messages: strip(messages.value), instructions: instructions.value })
     if (result.skip !== undefined) return result
-    const sanitized = (await sanitizeAndAudit($, result.messages, 'history', { hook: 'session.compact' })).map(message => { const { handle, ...built } = message; return built })
-    return { ...result, messages: sanitized }
-  })
+    const sanitized = await trySanitize($, result.messages, 'history', { signal: next.signal, hook: 'session.compact' })
+    if (!sanitized.ok) return { skip: BLOCKED_TEXT }
+    return { ...result, messages: strip(sanitized.value) }
+  }).catch(catchSessionCompact)
 
   // Rewrites the row before it is stored, so neither the model nor the transcript file sees raw values.
   on('session.append', async ($, e, next) => {
@@ -333,17 +422,18 @@ export function register(on) {
     const texts = rowTexts(content)
     if (!texts.some(text => text !== null)) return next(e)
     const source = e.door === 'command' ? 'user_command' : 'history'
-    const sanitized = await sanitizeAndAudit($, texts, source, { hook: 'session.append' })
+    const sanitized = await sanitizeAndAudit($, texts, source, { signal: next.signal, hook: 'session.append' })
     return next({ ...e, message: { ...e.message, content: rebuildRow(content, sanitized) } })
-  })
+  }).catch(catchSessionAppend)
 
   on('turn.step', async function* ($, e, next) {
     const agentInputs = new Set()
     for await (const chunk of next(e)) {
-      if (chunk.kind === 'text') yield { ...chunk, text: await sanitizeAndAudit($, chunk.text, 'history', { hook: 'turn.step', agent_id: e.agentId }) }
+      if (chunk.kind === 'text') yield { ...chunk, text: await sanitizeAndAudit($, chunk.text, 'history', { signal: next.signal, hook: 'turn.step', agent_id: e.agentId }) }
       else if (chunk.kind === 'tool') { if (chunk.name === 'Agent') agentInputs.add(chunk.index); yield chunk }
-      else if (chunk.kind === 'input' && agentInputs.has(chunk.index)) yield { ...chunk, json: await sanitizeAndAudit($, chunk.json, 'subagent', { hook: 'turn.step.agent-input', agent_id: e.agentId }) }
+      // A blocked fragment may leave the Agent input unparsable; the call then fails, raw-free.
+      else if (chunk.kind === 'input' && agentInputs.has(chunk.index)) yield { ...chunk, json: await sanitizeAndAudit($, chunk.json, 'subagent', { signal: next.signal, hook: 'turn.step.agent-input', agent_id: e.agentId }) }
       else yield chunk
     }
-  })
+  }).catch(catchTurnStep)
 }
