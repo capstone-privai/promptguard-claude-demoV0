@@ -45,5 +45,58 @@ class ProseTests(unittest.TestCase):
                 self.assertEqual(self.found(text), expected)
 
 
+class DotenvCommandTests(unittest.TestCase):
+    """A .env value that is a whole command (seen in the showcase .env: shell-aware missed it)."""
+
+    def setUp(self) -> None:
+        self.adapter = ShellAwareAdapter("shell-aware", {}, ROOT)
+
+    def found(self, text: str) -> list[str]:
+        return [text[f.start:f.end] for f in self.adapter.scan(text)]
+
+    def test_assigned_command_is_read_as_the_command(self) -> None:
+        self.assertEqual(self.found("DEPLOY_CMD=mysql -u deploy -pSynthDeploy_91x -h db orders"), ["SynthDeploy_91x"])
+        self.assertEqual(self.found("LOGIN=sshpass -p SynthSsh_42z ssh deploy@db"), ["SynthSsh_42z"])
+
+    def test_ordinary_assignments_still_skipped(self) -> None:
+        self.assertEqual(self.found("FOO=bar mysql -u root -pSynthPw_77q db"), ["SynthPw_77q"])
+        self.assertEqual(self.found("PAGER=less mysql -p db"), [])
+        self.assertEqual(self.found("DB_HOST=demo-db.internal"), [])
+
+    def test_export_and_similar_prefixes(self) -> None:
+        for text in (
+            "export DEPLOY_CMD=mysql -u deploy -pSynthDeploy_91x -h db orders",
+            "readonly DEPLOY_CMD=mysql -u deploy -pSynthDeploy_91x db",
+            "declare -x DEPLOY_CMD=mysql -u deploy -pSynthDeploy_91x db",
+            "env FOO=bar mysql -u deploy -pSynthDeploy_91x db",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(self.found(text), ["SynthDeploy_91x"])
+
+    def test_quoted_value_is_scanned_as_a_command(self) -> None:
+        for text in (
+            'DEPLOY_CMD="mysql -u deploy -pSynthDeploy_91x -h db orders"',
+            "DEPLOY_CMD='mysql -u deploy -pSynthDeploy_91x -h db orders'",
+            'export DEPLOY_CMD="mysql -u deploy -pSynthDeploy_91x -h db orders"',
+            'DB_HOST=db\nDEPLOY_CMD="mysql -u deploy -pSynthDeploy_91x db"\nTTL=5400',
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(self.found(text), ["SynthDeploy_91x"])
+        # Any command inside the quotes, not only the ASSIGNED_COMMANDS list.
+        self.assertEqual(self.found('LOGIN="sshpass -p SynthSsh_42z ssh deploy@db"'), ["SynthSsh_42z"])
+        self.assertEqual(self.found('SYNC_CMD="rsync --password=SynthRsync_31k src dst"'), ["SynthRsync_31k"])
+
+    def test_quoted_values_that_are_not_credentials(self) -> None:
+        for text in (
+            'BUILD_CMD="mkdir -p build/out"',
+            'RUN_CMD="docker run -p 8080:80 nginx"',
+            'GREETING="hello world"',
+            'DEPLOY_CMD="mysql -u deploy -p$DB_PASSWORD db"',
+            "export -p",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(self.found(text), [])
+
+
 if __name__ == "__main__":
     unittest.main()

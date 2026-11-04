@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import bisect
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -167,11 +167,38 @@ def right_segment(tokens: list[ShellToken], index: int) -> list[ShellToken]:
     return tokens[index + 1:end]
 
 
+# A .env line keeps a whole command in one unquoted value: DEPLOY_CMD=mysql -u deploy -p<password> ... A shell
+# would read that as an assignment followed by the command "-u"; the password is exposed all the same, so an
+# assignment whose value is one of these commands starts the command instead.
+ASSIGNED_COMMANDS = frozenset({"mysql", "mysqldump", "sshpass", "docker", "sudo"})
+# Words that only introduce assignments (and their own flags): "export A=1 cmd", "declare -x A=1", "env A=1 cmd".
+ASSIGNMENT_PREFIXES = frozenset({"export", "readonly", "declare", "typeset", "local", "env"})
+# NAME="..." or NAME='...' holding more than one word: the inside is a command line of its own.
+QUOTED_ASSIGNMENT = re.compile(r"""^[A-Za-z_][A-Za-z0-9_]*=(?P<quote>['"])(?P<inner>.*\s.*)(?P=quote)$""", re.S)
+
+
+def quoted_assignment_contexts(tokens: list[ShellToken]) -> list[tuple[int, str]]:
+    contexts = []
+    for token in tokens:
+        match = None if token.operator else QUOTED_ASSIGNMENT.fullmatch(token.raw)
+        if match:
+            contexts.append((token.start + match.start("inner"), match.group("inner")))
+    return contexts
+
+
 def command_words(tokens: list[ShellToken]) -> list[ShellToken]:
     words = [token for token in tokens if not token.operator]
     while words and PROMPT_MARKER.fullmatch(words[0].value):
         words.pop(0)  # "$ sshpass ...", "PS C:\\> ..."
+    if words and words[0].value in ASSIGNMENT_PREFIXES:
+        words.pop(0)
+        while words and words[0].value.startswith("-"):
+            words.pop(0)  # declare -x, env -i
     while words and "=" in words[0].value and not words[0].value.startswith("-"):
+        _, _, assigned = words[0].value.partition("=")
+        if Path(assigned.lower()).name.removesuffix(".exe") in ASSIGNED_COMMANDS:
+            words[0] = replace(words[0], value=assigned)
+            break
         words.pop(0)
     return words
 
@@ -283,7 +310,7 @@ def split_args(args: str) -> list[str]:
 
 
 class ShellAwareAdapter(DetectorAdapter):
-    version = "0.2.1"
+    version = "0.2.2"
 
     def __init__(self, name: str, options: Mapping[str, Any], config_dir: Path) -> None:
         super().__init__(name, options, config_dir)
@@ -300,6 +327,8 @@ class ShellAwareAdapter(DetectorAdapter):
             contexts = [(line_start, line)] + [
                 (line_start + code.start(1), code.group(1)) for code in INLINE_CODE.finditer(line)
             ]
+            # DEPLOY_CMD="mysql -p..." keeps a command inside one quoted word; read the inside as its own line.
+            contexts += quoted_assignment_contexts(tokenize(line, line_start))
             for context_start, context in contexts:
                 line_tokens = tokenize(context, context_start)
                 output.extend(self._long_options(line_tokens))
