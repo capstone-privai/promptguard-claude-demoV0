@@ -430,6 +430,109 @@ describe('production-style Final Guard', { concurrency: 1 }, () => {
     assert.equal(status.raw_marker_count, 0)
   })
 
+  // Backstop: a request that never went through the Mod (a path the Mod does not know, or a Mod that
+  // failed) reaches the Guard with the raw value. Each door below must be refused before upstream,
+  // and neither the response, the audit, nor the Guard's own output may carry the value.
+  function backstopBody(fields) {
+    return Buffer.from(JSON.stringify({ model: 'claude-test', max_tokens: 32, messages: [{ role: 'user', content: 'hello' }], ...fields }), 'utf8')
+  }
+
+  async function assertBlocked(label, body, pathname = '/v1/messages') {
+    await resetUpstream()
+    const result = await providerRequest(body, { pathname })
+    assert.equal(result.statusCode, 422, label)
+    assert.equal(JSON.parse(result.body).error.code, 'DETECTOR_FINDINGS', label)
+    assert.equal(result.body.includes(MARKER), false, `${label}: response`)
+    assert.equal(JSON.stringify(result.headers).includes(MARKER), false, `${label}: headers`)
+    assert.equal((await upstreamStatus()).request_count, 0, `${label}: reached upstream`)
+    const audit = fs.readFileSync(auditPath, 'utf8')
+    assert.equal(audit.includes(MARKER), false, `${label}: audit`)
+    assert.equal(guard.stderr().includes(MARKER), false, `${label}: guard stderr`)
+    const last = JSON.parse(audit.trim().split(/\r?\n/).at(-1))
+    assert.equal(last.decision, 'block', label)
+    assert.equal(last.endpoint, pathname.split('?')[0], label)
+  }
+
+  const BACKSTOP_DOORS = {
+    'user text block': { messages: [{ role: 'user', content: [{ type: 'text', text: `pw ${MARKER}` }] }] },
+    'tool_result string content': { messages: [
+      { role: 'user', content: 'read it' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: { file_path: '.env' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: `DB_PASSWORD=${MARKER}` }] },
+    ] },
+    'tool_result text block content': { messages: [
+      { role: 'user', content: 'run it' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_2', name: 'Bash', input: { command: 'cat .env' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_2', content: [{ type: 'text', text: `TOKEN=${MARKER}` }] }] },
+    ] },
+    'tool_result error': { messages: [
+      { role: 'user', content: 'run it' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_3', name: 'Bash', input: { command: 'psql' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_3', is_error: true, content: `auth failed for ${MARKER}` }] },
+    ] },
+    'tool_use input (assistant history)': { messages: [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_4', name: 'Bash', input: { command: `psql -p ${MARKER}` } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_4', content: 'ok' }] },
+    ] },
+    'assistant text (history)': { messages: [
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: [{ type: 'text', text: `the key is ${MARKER}` }] },
+      { role: 'user', content: 'thanks' },
+    ] },
+    'system string': { system: `Deploy with ${MARKER}` },
+    'system text blocks': { system: [{ type: 'text', text: 'You are helpful.' }, { type: 'text', text: `secret ${MARKER}`, cache_control: { type: 'ephemeral' } }] },
+    'tool definition description': { tools: [{ name: 'deploy', description: `uses ${MARKER}`, input_schema: { type: 'object', properties: {} } }] },
+    'document block with text source': { messages: [{ role: 'user', content: [{ type: 'document', source: { type: 'text', media_type: 'text/plain', data: `pw ${MARKER}` } }] }] },
+    'image block with url source': { messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'url', url: `https://example.test/i.png?k=${MARKER}` } }] }] },
+  }
+
+  for (const [door, fields] of Object.entries(BACKSTOP_DOORS)) {
+    test(`backstop: a raw value in ${door} is refused on /v1/messages`, async () => {
+      await assertBlocked(door, backstopBody(fields))
+    })
+  }
+
+  for (const door of ['user text block', 'tool_result string content', 'system string', 'system text blocks']) {
+    test(`backstop: a raw value in ${door} is refused on /v1/messages/count_tokens`, async () => {
+      await assertBlocked(door, backstopBody(BACKSTOP_DOORS[door]), '/v1/messages/count_tokens?beta=true')
+    })
+  }
+
+  // Recorded, not fixed: what the Guard does with content that is not plain text. The Guard scans
+  // every JSON string value as it is; it decodes nothing and does not read object keys.
+  test('backstop record: encoded content and object keys', async () => {
+    const encoded = Buffer.from(`DB_PASSWORD=${MARKER}`, 'utf8').toString('base64')
+    const cases = {
+      // Base64 is scanned as base64 text: the value inside is not seen.
+      'image base64 whose bytes spell the value': [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: encoded } }],
+      'document base64 (text/plain) holding the value': [{ type: 'document', source: { type: 'base64', media_type: 'text/plain', data: encoded } }],
+      // The raw characters in a string field are seen, whatever block holds them.
+      'image base64 field holding the value as is': [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: `AAAA${MARKER}` } }],
+    }
+    const outcomes = {}
+    for (const [name, content] of Object.entries(cases)) {
+      await resetUpstream()
+      const result = await providerRequest(backstopBody({ messages: [{ role: 'user', content }] }))
+      outcomes[name] = { status: result.statusCode, upstream: (await upstreamStatus()).request_count }
+    }
+    // Object keys are not collected (collectStringLeaves walks Object.values only).
+    await resetUpstream()
+    const keyed = await providerRequest(backstopBody({ messages: [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_5', name: 'Bash', input: { [MARKER]: 'x' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_5', content: 'ok' }] },
+    ] }))
+    outcomes['tool_use input object key'] = { status: keyed.statusCode, upstream: (await upstreamStatus()).request_count }
+    assert.deepEqual(outcomes, {
+      'image base64 whose bytes spell the value': { status: 200, upstream: 1 },
+      'document base64 (text/plain) holding the value': { status: 200, upstream: 1 },
+      'image base64 field holding the value as is': { status: 422, upstream: 0 },
+      'tool_use input object key': { status: 200, upstream: 1 },
+    })
+    assert.equal(fs.readFileSync(auditPath, 'utf8').includes(MARKER), false)
+  })
+
   test('status and the complete JSONL audit remain raw-free and schema-limited', async () => {
     const status = await jsonRequest(guard.port, '/status')
     assert.equal(status.statusCode, 200)
