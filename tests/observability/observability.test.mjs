@@ -78,7 +78,7 @@ test('DTO removes payloads, errors, keys, hashes, paths and arbitrary tool ident
 async function hookHarness(failure = null) {
   const callbacks = new Map()
   const mod = await import(`../../src/native-mod/hooks/register.mjs?test=${Math.random()}`)
-  mod.register((name, handler) => callbacks.set(name, handler))
+  mod.register((name, handler) => { callbacks.set(name, handler); return { catch() {} } })
   let output = []
   const $ = {
     env: { get: async key => ({ PG_MOD_AUDIT: 'memory-only', PG_SESSION_HASH: session, PG_MOD_CONNECT_WAIT_MS: '0' }[key]) },
@@ -117,18 +117,18 @@ test('tool result, text and context all audited; no raw values returned', async 
   assert.equal(JSON.stringify(h.rows()).includes(synthetic), false)
 })
 
-for (const stage of ['detector', 'sanitizer']) test(`${stage} error is raw-free and retained after recovery`, async () => {
+for (const stage of ['detector', 'sanitizer']) test(`${stage} error blocks the text, is raw-free and retained after recovery`, async () => {
   const h = await hookHarness(stage)
-  let thrown
-  try { await h.callbacks.get('prompt.submit')(h.$, { text: synthetic, context: [] }, async e => e) } catch (error) { thrown = error }
-  assert.ok(thrown)
-  assert.equal(thrown.message.includes(synthetic), false)
+  // The hook never throws (the engine would skip it and send the original text): it blocks instead.
+  const blocked = await h.callbacks.get('prompt.submit')(h.$, { text: synthetic, context: [] }, async e => e)
+  assert.equal(blocked.text, '[PROMPTGUARD_BLOCKED: detector failure]')
   assert.equal(h.rows()[0].failure_stage, stage)
   assert.equal(JSON.stringify(h.rows()).includes(synthetic), false)
   h.recover()
   await h.callbacks.get('prompt.submit')(h.$, { text: 'hello', context: [] }, async e => e)
   assert.equal(h.rows()[0].event, 'scan_failed')
-  assert.equal(h.rows().length, 3)
+  // text failed and was blocked, then the hook went on to its (empty) context: 2 rows, 2 more after.
+  assert.equal(h.rows().length, 4)
 })
 
 test('existing denied tools and detector transport bypass are unchanged', async () => {

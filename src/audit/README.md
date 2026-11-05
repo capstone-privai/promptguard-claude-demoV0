@@ -10,7 +10,7 @@ Allowed fields: timestamp, hashed session id (`session_id_hash`, 64 hex), source
 
 Sources: `user_prompt`, `user_command` (`!` shell-mode rows from the `session.append` hook), `history`, `claude_md`, `automatic_context`, `subagent`, `read_result`, `grep`, `bash_stdout`, `bash_error`, `mcp`, `tool_result`.
 
-`blocked` on a Mod failure describes the hook failure only. It is not proof of provider-bound enforcement: Claude Code skips a hook that throws.
+`blocked: true` (`event: scan_failed`) means the detector could not check that text, so the Mod sent `[PROMPTGUARD_BLOCKED: detector failure]` in its place (a denied tool result, or a skipped compaction). The Mod never throws on a scan failure, because Claude Code skips a hook that throws and passes the original text on. It is still not proof of provider-bound enforcement; that is the Final Guard's job.
 
 ## Final Guard audit (`guard-audit.jsonl`, one JSON object per line)
 

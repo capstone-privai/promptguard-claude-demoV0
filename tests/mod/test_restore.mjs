@@ -30,7 +30,7 @@ async function load(env = {}) {
   // Fresh module instance per test so the in-memory vault starts empty.
   const { register } = await import(`../../src/native-mod/hooks/register.mjs?case=${Math.random()}`)
   const hooks = {}
-  register((name, handler) => { hooks[name] = handler })
+  register((name, handler) => { hooks[name] = handler; return { catch() {} } })
   const $ = {
     env: { get: async key => env[key] },
     fs: { write: async () => {} },
@@ -157,12 +157,13 @@ test('rows already sanitized by other hooks are not rescanned', async () => {
   assert.equal(scans, 0)
 })
 
-test('a detector failure on a shell-mode row fails closed without storing it', async () => {
+const BLOCKED = '[PROMPTGUARD_BLOCKED: detector failure]'
+
+test('a detector failure on a shell-mode row stores the block marker, not the row', async () => {
   const { hooks, $ } = await load({ PG_MOD_CONNECT_WAIT_MS: '0' })
   $.mcp.call = async () => { throw new Error('down') }
-  let stored = false
-  await assert.rejects(hooks['session.append']($, { door: 'command', origin: { kind: 'unclassified' }, uuid: 'u2', message: { type: 'user', role: 'user', content: [{ type: 'text', text: `DB_PASSWORD=${PASSWORD}` }] } }, () => { stored = true; return {} }), /PromptGuard detector failure/)
-  assert.equal(stored, false)
+  const stored = await append(hooks, $, 'command', [{ type: 'text', text: `DB_PASSWORD=${PASSWORD}` }])
+  assert.equal(stored.message.content[0].text, BLOCKED)
 })
 
 // The engine connects the pgdetector MCP server after the session starts; early hooks must wait, not be skipped.
@@ -178,19 +179,19 @@ test('hooks that run before the detector connects wait for it instead of failing
   assert.equal(stored.message.content[0].text, '<bash-stdout>DB_PASSWORD=[PASSWORD_1]</bash-stdout>')
 })
 
-test('a detector that never connects fails closed after the bounded wait', async () => {
+test('a detector that never connects blocks after the bounded wait', async () => {
   const { hooks, $ } = await load({ PG_MOD_CONNECT_WAIT_MS: '300' })
   $.mcp.call = async () => { throw notConnected() }
   const started = Date.now()
-  await assert.rejects(maskPrompt(hooks, $, `DB_PASSWORD=${PASSWORD}`), /PromptGuard detector failure/)
+  assert.equal(await maskPrompt(hooks, $, `DB_PASSWORD=${PASSWORD}`), BLOCKED)
   assert.ok(Date.now() - started >= 250)
 })
 
-test('once connected, a later detector failure fails at once without waiting', async () => {
+test('once connected, a later detector failure blocks at once without waiting', async () => {
   const { hooks, $ } = await load()
   await maskPrompt(hooks, $, 'hello')
   $.mcp.call = async () => { throw new Error('down') }
   const started = Date.now()
-  await assert.rejects(maskPrompt(hooks, $, `DB_PASSWORD=${PASSWORD}`), /PromptGuard detector failure/)
+  assert.equal(await maskPrompt(hooks, $, `DB_PASSWORD=${PASSWORD}`), BLOCKED)
   assert.ok(Date.now() - started < 1000)
 })

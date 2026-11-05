@@ -157,6 +157,17 @@ node tests/e2e/restore_history.mjs       # E2E (설치 후, Claude Code와 .venv
 
 E2E 증거(기록된 provider 요청, audit)는 `.runtime/e2e-restore/`에 남습니다.
 
+### 탐지기가 실패하면? (fail-closed)
+
+탐지기 호출이 실패하면(`scan_batch` 권한 거부, 브리지 타임아웃, 8MB 초과, 형식 오류) Mod는 검사하지 못한 텍스트를 `[PROMPTGUARD_BLOCKED: detector failure]`로 바꿔 넘깁니다. 도구 결과는 이 문구로 deny하고, compaction은 건너뜁니다. 훅이 예외를 던지면 Claude Code가 그 훅을 건너뛰고 원문을 그대로 넘기기 때문에, 훅은 예외를 던지지 않습니다. 그래도 훅이 실패하면(버그, 10초 예산 초과) 등록마다 붙인 `.catch`가 같은 문구로 대신 답합니다. 런처(`start-promptguard.*`, `promptguard run`)는 `mcp__pgdetector__scan_batch`를 `--allowedTools`로 미리 허용합니다.
+
+```bash
+node --test tests/mod/test_fail_closed.mjs   # 단위 테스트 (엔진 동작을 흉내 냄)
+node tests/e2e/fail_closed.mjs               # E2E: 권한 거부, 탐지기 다운, 정상
+```
+
+E2E는 `PG_E2E_CLAUDE`로 Claude Code 실행 파일(2.1.291)을, `PG_E2E_PLUGIN_DIR`로 비교할 Mod 폴더를 지정할 수 있습니다. 증거는 `.runtime/e2e-fail-closed/`에 남습니다.
+
 ## 5. 다른 프로젝트에서 실행
 
 Windows:

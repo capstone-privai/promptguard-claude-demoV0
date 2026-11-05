@@ -71,7 +71,9 @@ try {
   foreach ($skipped in @($health.skipped)) { Write-Warning "Detector: $($skipped.name) 제외됨 ($($skipped.reason))" }
   Write-Warning '이 launcher는 Mod-only입니다. 실제 provider용 Final Guard는 포함하지 않습니다.'
 
-  $args = @('--plugin-dir', (Join-Path $root 'src\native-mod'), '--mcp-config', $mcpConfig)
+  # Pre-allow the Mod's detector tool: a denied permission prompt would make every scan fail, and the
+  # Mod would then block all text. --allowedTools takes a list, so another option must follow it.
+  $args = @('--allowedTools', 'mcp__pgdetector__scan_batch', '--plugin-dir',(Join-Path $root 'src\native-mod'), '--mcp-config', $mcpConfig)
   if ($Prompt) { $args += @('-p', $Prompt) }
   if ($ClaudeArgs) { $args += $ClaudeArgs }
   & $claudeCommand.Source @args
