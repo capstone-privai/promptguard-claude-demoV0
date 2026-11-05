@@ -27,10 +27,14 @@ function typeName(value) {
   return String(value || 'CREDENTIAL').toUpperCase().replace(/[^A-Z0-9_]/g, '_') || 'CREDENTIAL'
 }
 
+// One placeholder per value: keyed by value_hash alone, so a value keeps the placeholder (and the
+// type) it got first even when a later finding names another type. The ensemble names a value by
+// its context: one key is SECRET after `"secret": ` and API_KEY after `API_KEY=`, and two numbers
+// for one key hid from the model that the files share it (metric-task t15).
 function placeholder(finding, raw) {
-  const kind = typeName(finding.type)
-  const key = `${kind}:${finding.value_hash}`
+  const key = finding.value_hash
   if (ledger.has(key)) return ledger.get(key)
+  const kind = typeName(finding.type)
   const next = (counters.get(kind) || 0) + 1
   counters.set(kind, next)
   const value = `[${kind}_${next}]`
@@ -81,17 +85,21 @@ function remaskText(text, counter) {
   return out
 }
 
+// Checks every span first, then numbers top to bottom (so the first value in a .env is _1), then
+// replaces from the end so earlier offsets stay valid.
 function redactText(text, findings) {
   const ordered = [...findings].sort((a, b) => b.start - a.start || b.end - a.end)
-  let out = text
   let previousStart = text.length + 1
   for (const finding of ordered) {
     if (finding.offset_unit !== 'utf16_code_units') throw new Error('PromptGuard detector offset unit mismatch')
     if (!Number.isInteger(finding.start) || !Number.isInteger(finding.end) || finding.start < 0 || finding.end > text.length || finding.start >= finding.end) throw new Error('PromptGuard detector invalid span')
     if (finding.end > previousStart) throw new Error('PromptGuard detector overlapping normalized spans')
-    out = out.slice(0, finding.start) + placeholder(finding, text.slice(finding.start, finding.end)) + out.slice(finding.end)
     previousStart = finding.start
   }
+  const placeholders = new Map()
+  for (const finding of [...ordered].reverse()) placeholders.set(finding, placeholder(finding, text.slice(finding.start, finding.end)))
+  let out = text
+  for (const finding of ordered) out = out.slice(0, finding.start) + placeholders.get(finding) + out.slice(finding.end)
   return out
 }
 
