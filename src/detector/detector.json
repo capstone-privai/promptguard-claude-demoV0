@@ -19,8 +19,7 @@
       "options": {
         "binary": "gitleaks",
         "config": null,
-        "timeout_seconds": 10,
-        "max_parallel": 4
+        "timeout_seconds": 10
       }
     },
     {
@@ -51,7 +50,12 @@
         "checkpoint": "models/span-detector-v9",
         "device": "cpu",
         "gate": "always",
-        "timeout_seconds": 4
+        "timeout_seconds": 4,
+        "long_text": "cue_windows",
+        "whole_text_chars": 2000,
+        "window_lines": 2,
+        "max_text_chars": 6000,
+        "too_long": "skip"
       }
     },
     {

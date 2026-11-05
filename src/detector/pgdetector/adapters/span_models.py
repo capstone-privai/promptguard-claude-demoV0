@@ -85,6 +85,17 @@ class _ModelRepoAdapter(DetectorAdapter):
         if too_long not in {"fail", "skip"}:
             raise ValueError("too_long must be 'fail' or 'skip'")
         self.too_long = too_long
+        # long_text: "whole" (default) gives the model the whole text. "cue_windows" gives it a text of up to
+        # whole_text_chars whole, and of a longer one only the lines within window_lines of a line with a credential
+        # cue (CUE). The model reads in time linear to its input: ml-v9 on CPU took about 0.4 s for 2 KB and 4 to
+        # 9 s for 20 KB, past its 4 s timeout, so every large tool output failed and was blocked. In this mode
+        # max_text_chars bounds what the model reads (the windows together), and too_long decides past it.
+        long_text = str(options.get("long_text", "whole"))
+        if long_text not in {"whole", "cue_windows"}:
+            raise ValueError("long_text must be 'whole' or 'cue_windows'")
+        self.long_text = long_text
+        self.whole_text_chars = int(options.get("whole_text_chars", 2000))
+        self.window_lines = max(0, int(options.get("window_lines", 2)))
         self.strong_threshold = float(options.get("strong_threshold", 0.99))
         # A model span shorter than this, or one that is an ordinary English word ("of", "by": ml-v9 flagged both
         # in a live demo session), is not a credential value and is dropped before it can mask anything.
@@ -107,9 +118,15 @@ class _ModelRepoAdapter(DetectorAdapter):
             return []
         if self.gate == "cue" and not CUE.search(text):
             return []
-        if self.max_text_chars is not None and len(text) > self.max_text_chars:
+        if self.long_text == "cue_windows":
+            regions = self._cue_windows(text)
+        elif self.max_text_chars is not None and len(text) > self.max_text_chars:
             return []
-        spans = self._call(lambda: self._spans(text))
+        else:
+            regions = [(0, text)]
+        if not regions:
+            return []
+        spans = self._call(lambda: self._region_spans(regions))
         findings = []
         for start, end, score in spans:
             if not (0 <= start < end <= len(text)):
@@ -122,6 +139,35 @@ class _ModelRepoAdapter(DetectorAdapter):
                 self.family, {"model": self.model_id}, round(float(score), 6),
             ))
         return findings
+
+    def _cue_windows(self, text: str) -> list[tuple[int, str]]:
+        """(offset, text) pieces for the model to read in cue_windows mode; [] leaves the text to the others."""
+        if len(text) <= self.whole_text_chars:
+            return [(0, text)]
+        lines, offset = [], 0
+        for line in text.splitlines(keepends=True):
+            lines.append((offset, line))
+            offset += len(line)
+        cued = [index for index, (_, line) in enumerate(lines) if CUE.search(line)]
+        ranges: list[list[int]] = []
+        for index in cued:
+            start, end = max(0, index - self.window_lines), min(len(lines), index + self.window_lines + 1)
+            if ranges and start <= ranges[-1][1]:
+                ranges[-1][1] = max(ranges[-1][1], end)
+            else:
+                ranges.append([start, end])
+        regions = [(lines[start][0], "".join(line for _, line in lines[start:end])) for start, end in ranges]
+        if self.max_text_chars is not None and sum(len(piece) for _, piece in regions) > self.max_text_chars:
+            if self.too_long == "skip":
+                return []
+            raise RuntimeError(f"{self.name}: cue windows exceed max_text_chars")
+        return regions
+
+    def _region_spans(self, regions: list[tuple[int, str]]) -> list[tuple[int, int, float]]:
+        out = []
+        for base, piece in regions:
+            out.extend((base + start, base + end, score) for start, end, score in self._spans(piece))
+        return out
 
     def _plausible(self, value: str) -> bool:
         word = value.strip().strip("\"'`.,;:()[]{}")
