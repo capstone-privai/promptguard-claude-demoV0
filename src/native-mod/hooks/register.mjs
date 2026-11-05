@@ -78,6 +78,71 @@ function remaskText(text, counter) {
     counter.count += parts.length - 1
     out = parts.join(reverseVault.get(raw))
   }
+  return remaskPartial(out, counter)
+}
+
+// Partial re-mask. A restored command can print part of a secret (`sed 's/(=.{12}).*/…/'`,
+// `cut -c1-12`, `head -c 20`), and the full-value pass above misses it: in the metric-task t09 run,
+// 12 of a 16-character password went out. So a run of at least partMinLength(raw) consecutive
+// characters of a known raw value is masked too, as [TYPE_N_PART].
+//
+// The minimum is max(8, half the value's length), rounded up:
+// - 8: shorter runs are shared by ordinary words and identifiers (`deploy-`, `report`), and give
+//   little of a value away. A value shorter than 8 characters is masked only whole.
+// - half: long values (JWTs, keys) have long common prefixes and fixed headers (a JWT header such as
+//   `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9` is 36 characters), and less than half of a long random
+//   value leaves the rest out of reach.
+// The marker ends in `_PART]`, outside PLACEHOLDER_PATTERN, so tool.call never restores a part to
+// the full value.
+const PART_MIN = 8
+const partMinLength = raw => Math.max(PART_MIN, Math.ceil(raw.length / 2))
+const partMarker = placeholder => `${placeholder.slice(0, -1)}_PART]`
+
+// Every PART_MIN-character window of every raw value long enough to have parts, so one pass over a
+// text finds them all, however many values there are. The vault only grows: rebuilt on a new value.
+let partIndex = { size: -1, windows: new Map() }
+
+function partWindows() {
+  if (partIndex.size === reverseVault.size) return partIndex.windows
+  const windows = new Map()
+  for (const raw of reverseVault.keys()) {
+    if (raw.length < PART_MIN) continue
+    for (let offset = 0; offset + PART_MIN <= raw.length; offset++) {
+      const window = raw.slice(offset, offset + PART_MIN)
+      const hits = windows.get(window)
+      if (hits) hits.push({ raw, offset })
+      else windows.set(window, [{ raw, offset }])
+    }
+  }
+  partIndex = { size: reverseVault.size, windows }
+  return windows
+}
+
+function remaskPartial(text, counter) {
+  if (text.length < PART_MIN || !reverseVault.size) return text
+  const windows = partWindows()
+  if (!windows.size) return text
+  const spans = []
+  for (let start = 0; start + PART_MIN <= text.length; start++) {
+    const hits = windows.get(text.slice(start, start + PART_MIN))
+    if (!hits) continue
+    // A run starting here, extended as far as it keeps matching; the longest one that is long
+    // enough for its value wins. Scanning left to right, the first hit of a run is its start.
+    let best = null
+    for (const { raw, offset } of hits) {
+      let end = start + PART_MIN
+      let at = offset + PART_MIN
+      while (end < text.length && at < raw.length && text[end] === raw[at]) { end++; at++ }
+      if (end - start >= partMinLength(raw) && (!best || end > best.end)) best = { start, end, raw }
+    }
+    if (!best) continue
+    spans.push(best)
+    start = best.end - 1
+  }
+  if (!spans.length) return text
+  counter.count += spans.length
+  let out = text
+  for (const { start, end, raw } of spans.reverse()) out = out.slice(0, start) + partMarker(reverseVault.get(raw)) + out.slice(end)
   return out
 }
 
