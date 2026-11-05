@@ -28,9 +28,11 @@ SECRET = "SyntheticModelKey_77Q"
 class FakeV9:
     def __init__(self, checkpoint, device="cpu", spans=(), fail=False, delay=0.0):
         self.spans, self.fail, self.delay, self.calls = list(spans), fail, delay, 0
+        self.read = []  # the texts the model was given
 
     def scan_text(self, text, threshold=None):
         self.calls += 1
+        self.read.append(text)
         if self.delay:
             time.sleep(self.delay)
         if self.fail:
@@ -129,6 +131,64 @@ class SpanModelTests(unittest.TestCase):
         loose = MLV9Adapter("ml-v9", {**self.options, "min_value_length": 2}, ROOT,
                             factory=lambda c, device: FakeV9(c, device, spans=[("ok", 0.99), ("of", 0.99)]))
         self.assertEqual([text2[r.start:r.end] for text2 in ["ok of"] for r in loose.scan(text2)], ["ok"])
+
+    # v9 on long text: cue windows. The model reads text in time linear to its length (on CPU about 0.4 s per
+    # 2 KB, 4 s per 20 KB, past the 4 s timeout), so long text is cut down to the lines near a credential cue.
+    def v9_windows(self, **options):
+        merged = {**self.options, "long_text": "cue_windows", "whole_text_chars": 2000, "window_lines": 2, "max_text_chars": 6000, "too_long": "skip", **options}
+        return MLV9Adapter("ml-v9", merged, ROOT, factory=lambda c, device: FakeV9(c, device, spans=[(SECRET, 0.9999)]))
+
+    @staticmethod
+    def long_log(lines=300, secret_at=None, cue_at=None, secret_line=None):
+        rows = [f"{i:04d} worker heartbeat ok, queue depth 3, latency 12ms\n" for i in range(lines)]
+        if cue_at is not None:
+            rows[cue_at] = f"{cue_at:04d} loaded the deploy password from vault\n"
+        if secret_at is not None:
+            rows[secret_at] = secret_line or f"{secret_at:04d} DB_PASSWORD={SECRET}\n"
+        return "".join(rows)
+
+    def test_v9_short_text_is_read_whole(self) -> None:
+        adapter = self.v9_windows()
+        text = f"the new one is {SECRET} so update the deploy"  # no cue word, short: still read
+        self.assertEqual([text[r.start:r.end] for r in adapter.scan(text)], [SECRET])
+        self.assertEqual(adapter.model.read, [text])
+
+    def test_v9_long_text_reads_only_the_lines_around_a_cue(self) -> None:
+        adapter = self.v9_windows()
+        text = self.long_log(secret_at=200)
+        self.assertGreater(len(text), 2000)
+        rows = adapter.scan(text)
+        self.assertEqual([text[r.start:r.end] for r in rows], [SECRET])
+        self.assertEqual(len(adapter.model.read), 1)
+        self.assertEqual(adapter.model.read[0].count("\n"), 5)  # the cue line and two either side
+
+    def test_v9_window_covers_a_value_next_to_the_cue_line(self) -> None:
+        adapter = self.v9_windows()
+        text = self.long_log(cue_at=100, secret_at=102, secret_line=f"0102 {SECRET}\n")
+        self.assertEqual([text[r.start:r.end] for r in adapter.scan(text)], [SECRET])
+        far = self.long_log(cue_at=100, secret_at=110, secret_line=f"0110 {SECRET}\n")
+        self.assertEqual(self.v9_windows().scan(far), [])
+
+    def test_v9_long_text_without_a_cue_is_left_to_the_others(self) -> None:
+        adapter = self.v9_windows()
+        self.assertEqual(adapter.scan(self.long_log()), [])
+        self.assertEqual(adapter.model.read, [])
+
+    def test_v9_windows_over_the_limit_skip_or_fail(self) -> None:
+        text = "".join(f"{i:04d} token rotated ok\n" for i in range(800))  # every line has a cue
+        skip = self.v9_windows()
+        self.assertEqual(skip.scan(text), [])
+        self.assertEqual(skip.model.read, [])
+        with self.assertRaises(RuntimeError):
+            self.v9_windows(too_long="fail").scan(text)
+
+    def test_v9_whole_mode_is_unchanged(self) -> None:
+        adapter = self.v9(spans=[(SECRET, 0.9999)])
+        text = self.long_log(secret_at=200)
+        self.assertEqual([text[r.start:r.end] for r in adapter.scan(text)], [SECRET])
+        self.assertEqual(adapter.model.read, [text])
+        with self.assertRaises(ValueError):
+            MLV9Adapter("ml-v9", {**self.options, "long_text": "sometimes"}, ROOT, factory=lambda c, device: FakeV9(c, device))
 
     # Qwen
     def test_qwen_error_status_fails_closed(self) -> None:
