@@ -139,7 +139,9 @@ Claude Code에서 `!`로 직접 실행한 명령과 그 출력은 `prompt.submit
 4. 실행 결과에 원래 값이 다시 나오면(예: `echo`로 출력), detector 검사 뒤에 vault 기준으로 한 번 더 확인해 탐지기가 놓친 값을 같은 placeholder로 다시 가립니다(re-mask).
 5. audit에는 값 없이 `restored_count`, `remasked_count` 개수만 남습니다.
 
-끄려면 `PG_RESTORE_PLACEHOLDERS=off`를 지정합니다.
+원래 값의 **일부**만 출력돼도 가립니다(`sed`, `cut`, `head -c`로 잘라 출력한 경우). 원래 값의 연속된 `max(8, 길이의 절반)`자 이상이 출력에 있으면 `[PASSWORD_1_PART]`처럼 `_PART`를 붙인 표시로 바꿉니다. 이 표시는 원래 값으로 복원되지 않습니다. 8자보다 짧은 값은 전체가 나올 때만 가립니다. 비밀 50개, 출력 100KB에서 한 번에 약 10ms가 더 듭니다(`node tests/performance/remask_bench.mjs`).
+
+원복을 끄려면 `PG_RESTORE_PLACEHOLDERS=off`를 지정합니다. re-mask는 그대로 동작합니다.
 
 ### 원복한 값이 모델로 다시 실려 가는가? (E2E 검증)
 
