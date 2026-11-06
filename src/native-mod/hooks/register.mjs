@@ -98,9 +98,20 @@ function remaskText(text, counter) {
 //   value leaves the rest out of reach.
 // The marker ends in `_PART]`, outside PLACEHOLDER_PATTERN, so tool.call never restores a part to
 // the full value.
+//
+// A run made only of ordinary words is not masked as a part (the whole value still is). A password a
+// person chose (`password123!`, `my-super-secret-key`) shares its words with ordinary output, and
+// masking every `password` or `localhost` in later source code and logs breaks the model's reads and
+// edits of that code, while the provider cannot tell such a word belongs to a secret. A word here is
+// all lower case, all upper case or capitalized, joined by - _ . or spaces; a run with a digit, a
+// symbol or mixed case inside a word is masked. A random value rarely has such a run: about 3 in
+// 1,000 8-character pieces of a base62 value and 9 in 100,000 12-character ones. The cost: a fragment
+// of a password made only of words (`correct-horse-battery`) goes out when printed alone.
 const PART_MIN = 8
 const partMinLength = raw => Math.max(PART_MIN, Math.ceil(raw.length / 2))
 const partMarker = placeholder => `${placeholder.slice(0, -1)}_PART]`
+const WORD = '(?:[a-z]+|[A-Z]+|[A-Z][a-z]+)'
+const WORDS_ONLY = new RegExp(`^[-_. ]*${WORD}(?:[-_. ]+${WORD})*[-_. ]*$`)
 
 // Every PART_MIN-character window of every raw value long enough to have parts, so one pass over a
 // text finds them all, however many values there are. The vault only grows: rebuilt on a new value.
@@ -139,7 +150,7 @@ function remaskPartial(text, counter) {
       while (end < text.length && at < raw.length && text[end] === raw[at]) { end++; at++ }
       if (end - start >= partMinLength(raw) && (!best || end > best.end)) best = { start, end, raw }
     }
-    if (!best) continue
+    if (!best || WORDS_ONLY.test(text.slice(best.start, best.end))) continue
     spans.push(best)
     start = best.end - 1
   }
