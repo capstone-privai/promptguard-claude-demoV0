@@ -121,3 +121,37 @@ test('a secret shorter than 8 characters is masked only when it appears whole', 
   await maskPrompt(hooks, $, `PIN=${short}`)
   assert.equal(await bashOutput(hooks, $, `${short} ${short.slice(0, 6)}\n`), `[PASSWORD_1] ${short.slice(0, 6)}\n`)
 })
+
+// A secret made of ordinary words (a human-chosen password) shares those words with ordinary output.
+// Its run of letters is not masked as a part: the model cannot tell `password` in source code is part
+// of a secret, and masking it breaks reads and edits of that code. Synthetic values only.
+for (const [label, secret, text] of [
+  ['password123!', 'password123!', 'const password = form.get("password")\n'],
+  ['localhost1234', 'localhost1234', 'listening on http://localhost:8080\n'],
+  ['my-super-secret-key', 'my-super-secret-key', 'export SIGNING_SECRET=$(cat my-secret-key.txt) # secret-key rotation\n'],
+  ['postgres-password', 'postgres-password', 'POSTGRES_USER=app # the -password flag of postgres\n'],
+  ['development-secret', 'development-secret', 'NODE_ENV=development\n'],
+  ['Spring_Password', 'Spring_Password9', 'Spring_Password field is required\n'],
+]) {
+  test(`a word-only fragment of ${label} in ordinary output is left alone`, async () => {
+    const { hooks, $ } = await load([[secret, 'PASSWORD']])
+    assert.equal(await maskPrompt(hooks, $, `DB_PASSWORD=${secret}`), 'DB_PASSWORD=[PASSWORD_1]')
+    assert.equal(await bashOutput(hooks, $, text), text)
+  })
+}
+
+test('a fragment of a word-based password that goes past the words is still masked', async () => {
+  const secret = 'password123!'
+  const { hooks, $ } = await load([[secret, 'PASSWORD']])
+  await maskPrompt(hooks, $, `DB_PASSWORD=${secret}`)
+  assert.equal(await bashOutput(hooks, $, 'DB_PASSWORD=password12…\n'), 'DB_PASSWORD=[PASSWORD_1_PART]…\n')
+  assert.equal(await bashOutput(hooks, $, `${secret}\n`), '[PASSWORD_1]\n')
+})
+
+test('a letters-only fragment of a random password is still masked', async () => {
+  // Mixed case inside one run is not an ordinary word.
+  const secret = 'QxvmRtkPLsNwZ7!a'
+  const { hooks, $ } = await load([[secret, 'PASSWORD']])
+  await maskPrompt(hooks, $, `DB_PASSWORD=${secret}`)
+  assert.equal(await bashOutput(hooks, $, `${secret.slice(0, 12)}\n`), '[PASSWORD_1_PART]\n')
+})
