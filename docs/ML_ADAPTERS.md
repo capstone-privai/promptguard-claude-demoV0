@@ -1,13 +1,14 @@
-# 팀 ML 탐지기 adapter (ml-v9, ml-qwen)
+# 팀 ML 탐지기 adapter (ml-span, ml-v9, ml-qwen)
 
 민준 저장소 [`capstone-privai/promptguard-model`](https://github.com/capstone-privai/promptguard-model)의 두 모델을 PromptGuard 탐지기 모듈로 붙이는 adapter다. 두 모듈은 서로 독립이라 하나씩 또는 같이 켤 수 있다. 기본값은 둘 다 꺼짐이다.
 
 | 모듈 | 감싸는 함수 | 모델 폴더 | 속도 (민준 측정, CPU 4스레드) |
 |---|---|---|---|
-| `ml-v9` | `privai_model.ml_span.runtime.MLSpanDetector.scan_text` | `checkpoint`로 정함, 지금은 `models/span-detector-v10` (약 560MB) | 입력당 평균 33ms |
+| `ml-span` | `privai_model.ml_span.runtime.MLSpanDetector.scan_text` | 민준 저장소의 기본 모델, 지금은 `models/span-detector-v10` (약 560MB) | v9와 같은 구조 |
+| `ml-v9` | `privai_model.ml_span.runtime.MLSpanDetector.scan_text` | `models/span-detector-v9`로 고정 (약 560MB) | 입력당 평균 33ms |
 | `ml-qwen` | `privai_model.qwen_span.wrapper.QwenSecretScanner.scan` | `models/qwen-span-v3` (LoRA + 베이스 Qwen2.5-Coder-0.5B) | 입력당 평균 약 1.0초 (v3, 민준 측정) |
 
-두 모듈 모두 `candidate_only: true`라 `majority` 정책에서는 투표하지 않는다. `union` 정책(기본)에서는 하나만 잡아도 마스킹된다.
+세 모듈 모두 `candidate_only: true`라 `majority` 정책에서는 투표하지 않는다. `union` 정책(기본)에서는 하나만 잡아도 마스킹된다.
 
 ## Qwen v3 (2026-10-30부터 기본)
 
@@ -26,10 +27,11 @@
 
 ```powershell
 cd sample-protected-project
-..\promptguard.cmd run --enable ml-v9                       # 기본 4종 + v9
+..\promptguard.cmd run --enable ml-span                     # 기본 4종 + 민준 저장소의 기본 모델
+..\promptguard.cmd run --enable ml-v9                       # 기본 4종 + v9 고정 (비교, 재평가용)
 ..\promptguard.cmd run --enable ml-qwen                     # 기본 4종 + Qwen
-..\promptguard.cmd run --enable ml-v9,ml-qwen               # 둘 다
-..\promptguard.cmd run --enable ml-v9 --disable shell-aware # 섞어서
+..\promptguard.cmd run --enable ml-span,ml-qwen             # 둘 다
+..\promptguard.cmd run --enable ml-span --disable shell-aware # 섞어서
 ..\promptguard.cmd run --policy majority                    # 기존 다수결로 비교
 ```
 
@@ -45,8 +47,8 @@ cd sample-protected-project
 | 옵션 | 모듈 | 기본값 | 뜻 |
 |---|---|---|---|
 | `repository` | 둘 다 | `../../../promptguard-model` | 민준 저장소 경로 |
-| `checkpoint` / `bundle` | v9 / Qwen | `default` (detector.json) | `default`면 민준 저장소 모듈의 `DEFAULT_BUNDLE`을 따른다. 폴더를 직접 쓰면 그 폴더로 고정된다(저장소 기준, 예: `models/span-detector-v9`, `models/qwen-span-v2`) |
-| `fallback_checkpoint` / `fallback_bundle` | v9 / Qwen | `models/span-detector-v10` / `models/qwen-span-v3` | `default`인데 저장소가 `DEFAULT_BUNDLE`을 정하지 않았을 때 쓸 폴더 |
+| `checkpoint` / `bundle` | v9 / Qwen | `default` (ml-span, ml-qwen) / `models/span-detector-v9` (ml-v9) | `default`면 민준 저장소 모듈의 `DEFAULT_BUNDLE`을 따른다. 폴더를 직접 쓰면 그 폴더로 고정된다(저장소 기준, 예: `models/span-detector-v9`, `models/qwen-span-v2`) |
+| `fallback_checkpoint` / `fallback_bundle` | ml-span / Qwen | `models/span-detector-v10` / `models/qwen-span-v3` | `default`인데 저장소가 `DEFAULT_BUNDLE`을 정하지 않았을 때 쓸 폴더 |
 | `device` | 둘 다 | `cpu` / `auto` | `cpu`, `mps`, `cuda`, `auto` |
 | `threshold` | 둘 다 | 모델 번들의 값 | 점수 cutoff. 비우면 민준이 validation에서 고정한 값 |
 | `gate` | 둘 다 | `always` / `cue` | `cue`면 password, token, 비밀번호 같은 단어가 **단어 단위로** 있는 텍스트만 모델에 보낸다("tests passed"는 해당 없음) |
@@ -61,7 +63,7 @@ cd sample-protected-project
 
 - **fail-closed:** 모델 오류, Qwen의 `invalid_json`·`truncated`·`input_too_long`, 청크 수 초과, timeout은 모두 `ADAPTER_FAILURE:<이름>`이 되고 Native Mod와 Final Guard가 요청을 막는다.
 - **원문 비노출:** finding에는 위치, 점수, 모델 이름만 남는다.
-- **버전 교체:** 민준이 같은 함수 형태로 새 모델을 올리고 `DEFAULT_BUNDLE`을 바꾸면, 그 저장소에서 `git pull`과 `git lfs pull` 후 PromptGuard를 재시작하면 된다. 가장 높은 번호의 폴더를 쓰지 않는 이유는 번호가 팀의 채택을 뜻하지 않기 때문이다. `ml_span/runtime.py`에는 아직 이 상수가 없어서 mmBERT는 `fallback_checkpoint`를 쓴다. 실제로 로드한 폴더는 `promptguard status`의 `adapters[].version`에 나온다(예: `span-detector-v10:abc32620dd4f`). 모듈 이름 `ml-v9`는 옵션 호환 때문에 그대로 두었다. 함수 이름이나 출력 필드가 바뀌면 `src/detector/pgdetector/adapters/span_models.py`를 고친다.
+- **버전 교체:** 민준이 같은 함수 형태로 새 모델을 올리고 `DEFAULT_BUNDLE`을 바꾸면, 그 저장소에서 `git pull`과 `git lfs pull` 후 PromptGuard를 재시작하면 된다. 가장 높은 번호의 폴더를 쓰지 않는 이유는 번호가 팀의 채택을 뜻하지 않기 때문이다. `ml_span/runtime.py`에는 아직 이 상수가 없어서 mmBERT는 `fallback_checkpoint`를 쓴다. 실제로 로드한 폴더는 `promptguard status`의 `adapters[].version`에 나온다(예: `span-detector-v10:abc32620dd4f`). 이 동작은 `ml-span`의 것이다. `ml-v9`는 저장소 기본이 바뀌어도 v9로 남으므로, v9라고 표시된 결과는 항상 v9다. 두 모듈을 같이 켜면 모델을 worker마다 두 벌 올린다. 함수 이름이나 출력 필드가 바뀌면 `src/detector/pgdetector/adapters/span_models.py`를 고친다.
 
 ## 실제 모델 확인 (2026-10-29, 세훈 PC, CPU)
 

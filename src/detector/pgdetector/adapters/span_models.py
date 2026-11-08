@@ -1,10 +1,12 @@
 """Adapters for the team ML span detectors in capstone-privai/promptguard-model.
 
-Two independent modules, each switched on or off in detector.json (or with
+Independent modules, each switched on or off in detector.json (or with
 PG_DETECTOR_ENABLE / PG_DETECTOR_DISABLE):
 
-- ``ml-v9``   wraps ``privai_model.ml_span.runtime.MLSpanDetector`` (mmBERT token
-  classification). The name is historical: it runs whichever bundle is configured.
+- ``ml-span`` wraps ``privai_model.ml_span.runtime.MLSpanDetector`` (mmBERT token
+  classification) and runs the bundle the model repository names as its default.
+- ``ml-v9``   wraps the same class and stays on models/span-detector-v9, so that a
+  result labelled v9 is v9.
 - ``ml-qwen`` wraps ``privai_model.qwen_span.wrapper.QwenSecretScanner``
   (Qwen2.5-Coder LoRA).
 
@@ -208,13 +210,13 @@ class _ModelRepoAdapter(DetectorAdapter):
 
 
 class MLV9Adapter(_ModelRepoAdapter):
-    """mmBERT span detector (see the module docstring for which bundle). Long text is windowed by the model."""
+    """mmBERT span detector pinned to one bundle (v9 unless configured). Long text is windowed by the model."""
 
     family = "ml_v9"
 
     def __init__(self, name: str, options: Mapping[str, Any], config_dir: Path, *, factory: Callable[..., Any] | None = None) -> None:
         super().__init__(name, options, config_dir)
-        checkpoint = self._bundle_path(options, "checkpoint", "privai_model.ml_span.runtime", DEFAULT_SPAN_BUNDLE)
+        checkpoint = self._bundle_path(options, "checkpoint", "privai_model.ml_span.runtime", "models/span-detector-v9")
         if factory is None:
             if not _real_weights(checkpoint / "model.safetensors"):
                 raise AdapterUnavailable(f"{checkpoint.name} weights missing (run git lfs pull in the model repository)")
@@ -234,6 +236,15 @@ class MLV9Adapter(_ModelRepoAdapter):
     def _spans(self, text: str) -> list[tuple[int, int, float]]:
         rows = self.model.scan_text(text, threshold=self.threshold)  # raises RuntimeError on failure
         return [(int(row["start"]), int(row["end"]), float(row["score"])) for row in rows]
+
+
+class MLSpanAdapter(MLV9Adapter):
+    """The mmBERT bundle the model repository names as its default, whatever its version."""
+
+    family = "ml_span"
+
+    def __init__(self, name: str, options: Mapping[str, Any], config_dir: Path, *, factory: Callable[..., Any] | None = None) -> None:
+        super().__init__(name, {"checkpoint": "default", "fallback_checkpoint": DEFAULT_SPAN_BUNDLE, **options}, config_dir, factory=factory)
 
 
 class QwenAdapter(_ModelRepoAdapter):

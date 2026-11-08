@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src" / "detector"))
 
 from pgdetector import AdapterUnavailable, ConsensusPolicy, Detector, DetectorAdapter, RawFinding, load_detector  # noqa: E402
-from pgdetector.adapters.span_models import MLV9Adapter, QwenAdapter  # noqa: E402
+from pgdetector.adapters.span_models import MLSpanAdapter, MLV9Adapter, QwenAdapter  # noqa: E402
 
 SECRET = "SyntheticModelKey_77Q"
 
@@ -304,10 +304,14 @@ class SpanModelTests(unittest.TestCase):
     def test_shipped_config_lists_models_disabled(self) -> None:
         config = json.loads((ROOT / "src" / "detector" / "detector.json").read_text(encoding="utf-8"))
         entries = {entry["name"]: entry for entry in config["adapters"]}
-        for name in ("ml-v9", "ml-qwen"):
+        for name in ("ml-span", "ml-v9", "ml-qwen"):
             self.assertFalse(entries[name]["enabled"])
             self.assertFalse(entries[name]["required"])
             self.assertTrue(entries[name]["candidate_only"])
+        self.assertEqual("models/span-detector-v9", entries["ml-v9"]["options"]["checkpoint"], "a result labelled v9 is v9")
+        self.assertEqual("default", entries["ml-span"]["options"]["checkpoint"])
+        self.assertEqual(entries["ml-span"]["options"].keys() - {"checkpoint", "fallback_checkpoint"},
+                         entries["ml-v9"]["options"].keys() - {"checkpoint"}, "the two differ only in which bundle")
 
     # Which model runs, and saying so
     def bundle(self, name, file="span_bundle.json"):
@@ -338,6 +342,29 @@ class SpanModelTests(unittest.TestCase):
         runtime = types.ModuleType("privai_model.ml_span.runtime")
         with mock.patch.dict(sys.modules, {"privai_model.ml_span.runtime": runtime}):
             self.assertEqual("span-detector-v10", self.loaded({"checkpoint": "default", "fallback_checkpoint": "models/span-detector-v10"}).name)
+
+    def span(self, options=None):
+        seen = []
+        adapter = MLSpanAdapter("ml-span", {**self.options, **(options or {})}, ROOT, factory=lambda c, device: seen.append(c) or FakeV9(c, device, spans=[(SECRET, 0.9999)]))
+        return adapter, seen[0]
+
+    def test_ml_v9_is_v9_with_no_checkpoint_set(self) -> None:
+        runtime = types.ModuleType("privai_model.ml_span.runtime")
+        runtime.DEFAULT_BUNDLE = self.repo / "models" / "span-detector-v12"
+        with mock.patch.dict(sys.modules, {"privai_model.ml_span.runtime": runtime}):
+            self.assertEqual("span-detector-v9", self.loaded({}).name)
+
+    def test_ml_span_follows_the_default_and_falls_back_to_v10(self) -> None:
+        runtime = types.ModuleType("privai_model.ml_span.runtime")
+        with mock.patch.dict(sys.modules, {"privai_model.ml_span.runtime": runtime}):
+            self.assertEqual("span-detector-v10", self.span()[1].name)
+            runtime.DEFAULT_BUNDLE = self.repo / "models" / "span-detector-v12"
+            self.assertEqual("span-detector-v12", self.span()[1].name)
+
+    def test_ml_span_findings_are_not_labelled_v9(self) -> None:
+        with mock.patch.dict(sys.modules, {"privai_model.ml_span.runtime": types.ModuleType("privai_model.ml_span.runtime")}):
+            row = self.span()[0].scan(f"key {SECRET}")[0]
+        self.assertEqual(("ml_span", "ml_span-span"), (row.family, row.rule_id))
 
     def test_a_named_checkpoint_is_used_as_it_is(self) -> None:
         self.assertEqual("span-detector-v9", self.loaded({"checkpoint": "models/span-detector-v9"}).name)
