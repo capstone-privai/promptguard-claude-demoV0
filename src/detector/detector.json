@@ -47,7 +47,8 @@
       "candidate_only": true,
       "options": {
         "repository": "../../../promptguard-model",
-        "checkpoint": "models/span-detector-v9",
+        "checkpoint": "default",
+        "fallback_checkpoint": "models/span-detector-v10",
         "device": "cpu",
         "gate": "always",
         "timeout_seconds": 4,
@@ -66,7 +67,8 @@
       "candidate_only": true,
       "options": {
         "repository": "../../../promptguard-model",
-        "bundle": "models/qwen-span-v3",
+        "bundle": "default",
+        "fallback_bundle": "models/qwen-span-v3",
         "device": "auto",
         "gate": "cue",
         "timeout_seconds": 25,

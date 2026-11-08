@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import time
+import types
 import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -287,8 +288,15 @@ class SpanModelTests(unittest.TestCase):
         ]}), encoding="utf-8")
         self.assertEqual([], load_detector(config).skipped, "disabled entry is not even tried")
         with mock.patch.dict(os.environ, {"PG_DETECTOR_ENABLE": "ml-v9"}):
-            detector = load_detector(config)
-        self.assertEqual(["ml-v9"], [row["name"] for row in detector.skipped], "enabled, then skipped: no weights here")
+            with self.assertRaises(AdapterUnavailable):
+                load_detector(config)  # asked for by name and it cannot run: do not start without it
+        entries = json.loads(config.read_text(encoding="utf-8"))
+        entries["adapters"][1]["enabled"] = True
+        config.write_text(json.dumps(entries), encoding="utf-8")
+        detector = load_detector(config)
+        self.assertEqual(["ml-v9"], [row["name"] for row in detector.skipped], "on in the file, then skipped: no weights here")
+        entries["adapters"][1]["enabled"] = False
+        config.write_text(json.dumps(entries), encoding="utf-8")
         with mock.patch.dict(os.environ, {"PG_DETECTOR_ENABLE": "ml-v9", "PG_DETECTOR_DISABLE": "ml-v9,shell-aware"}):
             with self.assertRaises(ValueError):
                 load_detector(config)  # nothing left to vote: the policy refuses an empty ensemble
@@ -300,6 +308,75 @@ class SpanModelTests(unittest.TestCase):
             self.assertFalse(entries[name]["enabled"])
             self.assertFalse(entries[name]["required"])
             self.assertTrue(entries[name]["candidate_only"])
+
+    # Which model runs, and saying so
+    def bundle(self, name, file="span_bundle.json"):
+        folder = self.repo / "models" / name
+        folder.mkdir(parents=True)
+        (folder / file).write_text(json.dumps({"revision": "abc32620dd4f6ab06f5f"}), encoding="utf-8")
+        return folder
+
+    def test_the_model_id_names_the_folder_that_was_loaded(self) -> None:
+        self.bundle("span-detector-v10")
+        self.bundle("qwen-span-v2", "qwen_bundle.json")
+        v10 = MLV9Adapter("ml-v9", {**self.options, "checkpoint": "models/span-detector-v10"}, ROOT, factory=lambda c, device: FakeV9(c, device))
+        self.assertEqual("span-detector-v10:abc32620dd4f", v10.version)
+        self.assertEqual("qwen-span-v2:abc32620dd4f", self.qwen({"bundle": "models/qwen-span-v2"}).version)
+
+    def loaded(self, options):
+        seen = []
+        MLV9Adapter("ml-v9", {**self.options, **options}, ROOT, factory=lambda c, device: seen.append(c) or FakeV9(c, device))
+        return seen[0]
+
+    def test_default_follows_the_bundle_the_model_repository_names(self) -> None:
+        runtime = types.ModuleType("privai_model.ml_span.runtime")
+        runtime.DEFAULT_BUNDLE = self.repo / "models" / "span-detector-v12"
+        with mock.patch.dict(sys.modules, {"privai_model.ml_span.runtime": runtime}):
+            self.assertEqual("span-detector-v12", self.loaded({"checkpoint": "default"}).name)
+
+    def test_default_uses_the_fallback_until_the_repository_names_one(self) -> None:
+        runtime = types.ModuleType("privai_model.ml_span.runtime")
+        with mock.patch.dict(sys.modules, {"privai_model.ml_span.runtime": runtime}):
+            self.assertEqual("span-detector-v10", self.loaded({"checkpoint": "default", "fallback_checkpoint": "models/span-detector-v10"}).name)
+
+    def test_a_named_checkpoint_is_used_as_it_is(self) -> None:
+        self.assertEqual("span-detector-v9", self.loaded({"checkpoint": "models/span-detector-v9"}).name)
+
+    def test_qwen_default_follows_the_wrapper_constant(self) -> None:
+        wrapper = types.ModuleType("privai_model.qwen_span.wrapper")
+        wrapper.DEFAULT_BUNDLE = self.repo / "models" / "qwen-span-v9"
+        with mock.patch.dict(sys.modules, {"privai_model.qwen_span.wrapper": wrapper}):
+            adapter = self.qwen({"bundle": "default"})
+        self.assertEqual("qwen-span-v9", adapter.version)
+
+    # A call that timed out keeps running: it cannot be stopped, and the model is used by one thread at a time.
+    def staged(self, *delays, timeout=0.2):
+        fake = FakeV9("c", "cpu")
+        queue = list(delays)
+        real = fake.scan_text
+
+        def scan_text(text, threshold=None):
+            fake.delay = queue.pop(0) if queue else 0
+            return real(text, threshold=threshold)
+
+        fake.scan_text = scan_text
+        return MLV9Adapter("ml-v9", {**self.options, "timeout_seconds": timeout}, ROOT, factory=lambda c, device: fake), fake
+
+    def test_a_timed_out_call_does_not_fail_the_next_one(self) -> None:
+        # The second call waits 0.1 s for the first and runs for 0.15 s: over 0.2 s in all, within it for its own work.
+        adapter, _ = self.staged(0.3, 0.15)
+        with self.assertRaises(RuntimeError):
+            adapter.scan(f"key {SECRET}")
+        self.assertEqual([], adapter.scan(f"key {SECRET}"))
+
+    def test_a_call_that_gives_up_waiting_never_runs(self) -> None:
+        adapter, fake = self.staged(0.8, 0, timeout=0.05)
+        for _ in range(2):
+            with self.assertRaises(RuntimeError):
+                adapter.scan(f"key {SECRET}")
+        time.sleep(0.9)
+        self.assertEqual(1, fake.calls, "the call that gave up in the queue was cancelled")
+        self.assertEqual([], adapter.scan(f"key {SECRET}"))
 
 
 if __name__ == "__main__":

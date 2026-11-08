@@ -4,13 +4,16 @@ Two independent modules, each switched on or off in detector.json (or with
 PG_DETECTOR_ENABLE / PG_DETECTOR_DISABLE):
 
 - ``ml-v9``   wraps ``privai_model.ml_span.runtime.MLSpanDetector`` (mmBERT token
-  classification, models/span-detector-v9).
+  classification). The name is historical: it runs whichever bundle is configured.
 - ``ml-qwen`` wraps ``privai_model.qwen_span.wrapper.QwenSecretScanner``
-  (Qwen2.5-Coder LoRA, models/qwen-span-v3).
+  (Qwen2.5-Coder LoRA).
 
-Both only call the model repository's public entry points, so a new model
-version is picked up with ``git pull`` in that repository and a PromptGuard
-restart, as long as those entry points keep their shape.
+Which bundle: ``"checkpoint"`` / ``"bundle"`` set to ``"default"`` uses the
+``DEFAULT_BUNDLE`` the model repository's module names, and
+``fallback_checkpoint`` / ``fallback_bundle`` while it names none. A new model is
+then picked up with ``git pull`` and ``git lfs pull`` there and a PromptGuard
+restart, as long as the entry points keep their shape. The newest folder is not
+used: a version number does not mean the team adopted that model.
 
 Fail-closed: a model error, an unscannable chunk or a timeout raises, which the
 ensemble reports as ``ADAPTER_FAILURE:<name>`` and the Native Mod / Final Guard
@@ -19,6 +22,7 @@ treat as a blocked scan. Nothing here logs or returns candidate text.
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import re
@@ -32,6 +36,8 @@ from ..adapter import AdapterUnavailable, DetectorAdapter, RawFinding
 from .shell_aware import PROSE_WORDS
 
 DEFAULT_REPOSITORY = "../../../promptguard-model"
+DEFAULT_SPAN_BUNDLE = "models/span-detector-v10"
+DEFAULT_QWEN_BUNDLE = "models/qwen-span-v3"
 # Words that suggest a credential is nearby. Used only when an adapter sets
 # "gate": "cue" to skip slow models on text with no such word.
 # Whole words only (snake_case and camelCase parts count): "passed" or "bypass"
@@ -106,8 +112,32 @@ class _ModelRepoAdapter(DetectorAdapter):
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"pg-{name}")
         self._lock = threading.Lock()
 
+    def _bundle_path(self, options: Mapping[str, Any], key: str, module: str, fallback: str) -> Path:
+        """The configured bundle folder; "default" asks the model repository which bundle it names."""
+        value = options.get(key)
+        if value == "default":
+            try:
+                named = getattr(importlib.import_module(module), "DEFAULT_BUNDLE", None)
+            except (ImportError, OSError):
+                named = None  # the caller reports missing weights or dependencies as usual
+            value = str(named) if named else options.get(f"fallback_{key}")
+        return _resolve(self.repository, value, fallback)
+
     def _call(self, func: Callable[[], Any]) -> Any:
-        future = self._executor.submit(func)
+        if self.timeout is None:
+            return self._executor.submit(func).result()
+        started = threading.Event()
+
+        def run() -> Any:
+            started.set()
+            return func()
+
+        future = self._executor.submit(run)
+        # A call that timed out cannot be stopped and holds the model until it ends. The wait behind it is not this
+        # call's own time, so the timeout covers only the model's work and the wait gets the same length again. A
+        # call that gives up waiting is cancelled, so it does not hold up the calls after it.
+        if not started.wait(self.timeout) and future.cancel():
+            raise RuntimeError(f"{self.name} timed out")
         try:
             return future.result(timeout=self.timeout)
         except FutureTimeout:
@@ -178,27 +208,27 @@ class _ModelRepoAdapter(DetectorAdapter):
 
 
 class MLV9Adapter(_ModelRepoAdapter):
-    """mmBERT span detector (models/span-detector-v9). Long text is windowed by the model."""
+    """mmBERT span detector (see the module docstring for which bundle). Long text is windowed by the model."""
 
     family = "ml_v9"
 
     def __init__(self, name: str, options: Mapping[str, Any], config_dir: Path, *, factory: Callable[..., Any] | None = None) -> None:
         super().__init__(name, options, config_dir)
-        checkpoint = _resolve(self.repository, options.get("checkpoint"), "models/span-detector-v9")
+        checkpoint = self._bundle_path(options, "checkpoint", "privai_model.ml_span.runtime", DEFAULT_SPAN_BUNDLE)
         if factory is None:
             if not _real_weights(checkpoint / "model.safetensors"):
-                raise AdapterUnavailable("v9 weights missing (run git lfs pull in the model repository)")
+                raise AdapterUnavailable(f"{checkpoint.name} weights missing (run git lfs pull in the model repository)")
             try:
                 from privai_model.ml_span.runtime import MLSpanDetector as factory  # type: ignore[no-redef]
             except (ImportError, OSError) as exc:
-                raise AdapterUnavailable("v9 dependencies are not installed (torch, transformers)") from exc
+                raise AdapterUnavailable("span model dependencies are not installed (torch, transformers)") from exc
         threshold = options.get("threshold")
         self.threshold = float(threshold) if threshold is not None else None
         try:
             self.model = factory(checkpoint, device=str(options.get("device", "cpu")))
         except Exception as exc:
-            raise AdapterUnavailable("v9 model initialization failed") from exc
-        self.model_id = _bundle_id(checkpoint / "span_bundle.json", "span-detector-v9")
+            raise AdapterUnavailable(f"{checkpoint.name} model initialization failed") from exc
+        self.model_id = _bundle_id(checkpoint / "span_bundle.json", checkpoint.name)
         self.version = self.model_id
 
     def _spans(self, text: str) -> list[tuple[int, int, float]]:
@@ -207,7 +237,7 @@ class MLV9Adapter(_ModelRepoAdapter):
 
 
 class QwenAdapter(_ModelRepoAdapter):
-    """Qwen2.5-Coder LoRA span detector (models/qwen-span-v3) via QwenSecretScanner.
+    """Qwen2.5-Coder LoRA span detector via QwenSecretScanner.
 
     The scanner refuses inputs over its token limit, so long text is split on
     line boundaries into chunks that fit, with ``overlap_lines`` lines repeated
@@ -219,7 +249,7 @@ class QwenAdapter(_ModelRepoAdapter):
 
     def __init__(self, name: str, options: Mapping[str, Any], config_dir: Path, *, factory: Callable[..., Any] | None = None) -> None:
         super().__init__(name, options, config_dir)
-        bundle = _resolve(self.repository, options.get("bundle"), "models/qwen-span-v3")
+        bundle = self._bundle_path(options, "bundle", "privai_model.qwen_span.wrapper", DEFAULT_QWEN_BUNDLE)
         if factory is None:
             if not _real_weights(bundle / "adapter_model.safetensors"):
                 raise AdapterUnavailable("Qwen adapter weights missing (run git lfs pull in the model repository)")
@@ -237,7 +267,7 @@ class QwenAdapter(_ModelRepoAdapter):
         self.max_chunks = max(1, int(options.get("max_chunks", 8)))
         self.overlap_lines = max(0, int(options.get("overlap_lines", 1)))
         self.limit = int(getattr(self.model, "max_input_tokens", 4096))
-        self.model_id = _bundle_id(bundle / "qwen_bundle.json", "qwen-span-v3")
+        self.model_id = _bundle_id(bundle / "qwen_bundle.json", bundle.name)
         self.version = self.model_id
 
     def _fits(self, text: str) -> bool:

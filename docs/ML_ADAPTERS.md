@@ -4,7 +4,7 @@
 
 | 모듈 | 감싸는 함수 | 모델 폴더 | 속도 (민준 측정, CPU 4스레드) |
 |---|---|---|---|
-| `ml-v9` | `privai_model.ml_span.runtime.MLSpanDetector.scan_text` | `models/span-detector-v9` (약 560MB) | 입력당 평균 33ms |
+| `ml-v9` | `privai_model.ml_span.runtime.MLSpanDetector.scan_text` | `checkpoint`로 정함, 지금은 `models/span-detector-v10` (약 560MB) | 입력당 평균 33ms |
 | `ml-qwen` | `privai_model.qwen_span.wrapper.QwenSecretScanner.scan` | `models/qwen-span-v3` (LoRA + 베이스 Qwen2.5-Coder-0.5B) | 입력당 평균 약 1.0초 (v3, 민준 측정) |
 
 두 모듈 모두 `candidate_only: true`라 `majority` 정책에서는 투표하지 않는다. `union` 정책(기본)에서는 하나만 잡아도 마스킹된다.
@@ -16,7 +16,7 @@
 ## 준비
 
 1. 민준 저장소를 데모 저장소 **옆 폴더**에 둔다. 기본 경로는 `src/detector` 기준 `../../../promptguard-model`, 즉 데모 저장소와 같은 부모 폴더다. 다른 곳이면 `detector.json`의 `repository`를 바꾼다.
-2. 그 폴더에서 `git pull`과 `git lfs pull`을 실행한다. 가중치가 LFS 포인터 상태(1KB 미만)면 모듈은 시작할 때 건너뛰고 이유를 출력한다.
+2. 그 폴더에서 `git pull`과 `git lfs pull`을 실행한다. 가중치가 LFS 포인터 상태(1KB 미만)면 `detector.json`에서 켠 모듈은 시작할 때 건너뛰고 이유를 출력한다. `--enable`이나 `PG_DETECTOR_ENABLE`로 이름을 지정해 켰는데 쓸 수 없으면 PromptGuard가 시작하지 않는다.
 3. 데모 `.venv`에 `torch`, `transformers>=4.51,<5`, `numpy`, `peft>=0.13,<1`를 설치한다. 민준 패키지는 설치하지 않아도 된다. adapter가 `promptguard-model/src`를 import 경로에 넣는다.
 4. Qwen은 처음 실행할 때 베이스 모델(약 1GB)을 Hugging Face에서 받는다. 2026-10-29 세훈 PC에서 첫 로딩은 468초였다(대부분 다운로드). PromptGuard를 켜기 전에 확인 스크립트로 한 번 받아 두고, 모델을 켤 때는 worker 준비 대기 시간을 늘린다(`PG_READINESS_TIMEOUT_MS`, 기본 30000).
 
@@ -45,11 +45,12 @@ cd sample-protected-project
 | 옵션 | 모듈 | 기본값 | 뜻 |
 |---|---|---|---|
 | `repository` | 둘 다 | `../../../promptguard-model` | 민준 저장소 경로 |
-| `checkpoint` / `bundle` | v9 / Qwen | `models/span-detector-v9` / `models/qwen-span-v3` | 모델 폴더 (저장소 기준). v2로 되돌리려면 `models/qwen-span-v2` |
+| `checkpoint` / `bundle` | v9 / Qwen | `default` (detector.json) | `default`면 민준 저장소 모듈의 `DEFAULT_BUNDLE`을 따른다. 폴더를 직접 쓰면 그 폴더로 고정된다(저장소 기준, 예: `models/span-detector-v9`, `models/qwen-span-v2`) |
+| `fallback_checkpoint` / `fallback_bundle` | v9 / Qwen | `models/span-detector-v10` / `models/qwen-span-v3` | `default`인데 저장소가 `DEFAULT_BUNDLE`을 정하지 않았을 때 쓸 폴더 |
 | `device` | 둘 다 | `cpu` / `auto` | `cpu`, `mps`, `cuda`, `auto` |
 | `threshold` | 둘 다 | 모델 번들의 값 | 점수 cutoff. 비우면 민준이 validation에서 고정한 값 |
 | `gate` | 둘 다 | `always` / `cue` | `cue`면 password, token, 비밀번호 같은 단어가 **단어 단위로** 있는 텍스트만 모델에 보낸다("tests passed"는 해당 없음) |
-| `timeout_seconds` | 둘 다 | 4 / 25 | 넘기면 오류로 처리해 요청을 막는다 |
+| `timeout_seconds` | 둘 다 | 4 / 25 | 모델 작업이 넘기면 오류로 처리해 요청을 막는다. 앞선 호출이 끝나기를 기다리는 시간은 따로 같은 길이만큼 허용한다 |
 | `max_text_chars` | 둘 다 | 없음 / 12000 (Qwen) | 이보다 긴 텍스트는 이 모델이 보지 않고 다른 모듈에 맡긴다(cue 게이트와 같은 방식) |
 | `too_long` | 둘 다 | `fail` (코드 기본) / `skip` (detector.json) | 줄 하나가 입력 한도를 넘거나 청크가 `max_chunks`보다 많을 때: `fail`이면 오류로 요청을 막고, `skip`이면 그 텍스트를 다른 모듈에 맡긴다. 2026-10-30 시연 리허설에서 Claude Code의 긴 시스템 텍스트 때문에 Qwen이 실패해 요청이 막혀 `skip`으로 정했다 |
 | `min_value_length` | 둘 다 | 6 | 모델이 찍은 스팬이 이보다 짧거나 평범한 영어 단어(of, by, option 등)면 버린다. 2026-10-30 시연 중 ml-v9가 "of", "by"를 비밀로 찍은 오탐 때문에 넣었다. 6자 미만 비밀번호는 모델로는 가리지 않는다(다른 모듈은 여전히 검사) |
@@ -60,7 +61,7 @@ cd sample-protected-project
 
 - **fail-closed:** 모델 오류, Qwen의 `invalid_json`·`truncated`·`input_too_long`, 청크 수 초과, timeout은 모두 `ADAPTER_FAILURE:<이름>`이 되고 Native Mod와 Final Guard가 요청을 막는다.
 - **원문 비노출:** finding에는 위치, 점수, 모델 이름만 남는다.
-- **버전 교체:** 민준이 같은 함수 형태로 새 모델을 올리면 그 저장소에서 `git pull` 후 PromptGuard를 재시작하면 된다. 함수 이름이나 출력 필드가 바뀌면 `src/detector/pgdetector/adapters/span_models.py`를 고친다.
+- **버전 교체:** 민준이 같은 함수 형태로 새 모델을 올리고 `DEFAULT_BUNDLE`을 바꾸면, 그 저장소에서 `git pull`과 `git lfs pull` 후 PromptGuard를 재시작하면 된다. 가장 높은 번호의 폴더를 쓰지 않는 이유는 번호가 팀의 채택을 뜻하지 않기 때문이다. `ml_span/runtime.py`에는 아직 이 상수가 없어서 mmBERT는 `fallback_checkpoint`를 쓴다. 실제로 로드한 폴더는 `promptguard status`의 `adapters[].version`에 나온다(예: `span-detector-v10:abc32620dd4f`). 모듈 이름 `ml-v9`는 옵션 호환 때문에 그대로 두었다. 함수 이름이나 출력 필드가 바뀌면 `src/detector/pgdetector/adapters/span_models.py`를 고친다.
 
 ## 실제 모델 확인 (2026-10-29, 세훈 PC, CPU)
 

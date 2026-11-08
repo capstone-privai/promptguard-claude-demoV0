@@ -57,8 +57,13 @@ class CredSweeperAdapter(DetectorAdapter):
                     # Out-of-range line: the ensemble rejects the span and fails closed.
                     findings.append(RawFinding(-1, -1, "CREDENTIAL", str(candidate.rule_name), confidence_value(candidate)))
                     continue
-                cp_start = starts[line_index] + int(line_data.value_start)
-                cp_end = starts[line_index] + int(line_data.value_end)
+                value_start, value_end = int(line_data.value_start), int(line_data.value_end)
+                # The PEM rule reports the blank line of a PGP armor as an empty value: nothing to mask. Any other
+                # empty or negative span goes on to the ensemble, which rejects it and fails closed.
+                if value_start == value_end >= 0 and not lines[line_index].strip():
+                    continue
+                cp_start = starts[line_index] + value_start
+                cp_end = starts[line_index] + value_end
                 inferred_variable = assigned_variable(text, starts[line_index], cp_start)
                 if variable in BENIGN_VARIABLES or inferred_variable in BENIGN_VARIABLES:
                     continue
