@@ -40,8 +40,8 @@
       }
     },
     {
-      "name": "ml-v9",
-      "type": "ml-v9",
+      "name": "ml-span",
+      "type": "ml-span",
       "enabled": false,
       "required": false,
       "candidate_only": true,
@@ -49,6 +49,25 @@
         "repository": "../../../promptguard-model",
         "checkpoint": "default",
         "fallback_checkpoint": "models/span-detector-v10",
+        "device": "cpu",
+        "gate": "always",
+        "timeout_seconds": 4,
+        "long_text": "cue_windows",
+        "whole_text_chars": 2000,
+        "window_lines": 2,
+        "max_text_chars": 6000,
+        "too_long": "skip"
+      }
+    },
+    {
+      "name": "ml-v9",
+      "type": "ml-v9",
+      "enabled": false,
+      "required": false,
+      "candidate_only": true,
+      "options": {
+        "repository": "../../../promptguard-model",
+        "checkpoint": "models/span-detector-v9",
         "device": "cpu",
         "gate": "always",
         "timeout_seconds": 4,

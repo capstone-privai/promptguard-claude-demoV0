@@ -9,7 +9,7 @@ const path = require('path')
 
 const DEFAULT_DETECTOR_CONFIG = path.resolve(__dirname, '..', 'detector', 'detector.json')
 const POLICIES = new Set(['union', 'majority'])
-const ML_ADAPTERS = new Set(['ml-v9', 'ml-qwen'])
+const ML_ADAPTERS = new Set(['ml-span', 'ml-v9', 'ml-qwen'])
 const ML_READINESS_MS = 180000
 const QWEN_DETECTOR_TIMEOUT_MS = 30000
 

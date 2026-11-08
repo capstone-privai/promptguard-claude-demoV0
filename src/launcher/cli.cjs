@@ -29,18 +29,19 @@ Options:
   --json         Emit machine-readable status output.
 
 Detector options (run):
-  --enable NAMES             Turn detectors on, comma-separated (e.g. ml-v9,ml-qwen).
+  --enable NAMES             Turn detectors on, comma-separated (e.g. ml-span,ml-qwen).
   --disable NAMES            Turn detectors off; wins over --enable.
   --policy union|majority    union: any detector's span is masked (default in detector.json).
                              majority: the original vote of the non-candidate-only detectors.
   --detector-timeout-ms N    How long Native Mod and Final Guard wait for a scan.
   --readiness-timeout-ms N   How long startup waits for the detector workers.
-  Names: credsweeper, gitleaks, promptguard-rules, shell-aware, ml-v9, ml-qwen.
-  With ml-v9 or ml-qwen on, readiness defaults to 180000 ms; with ml-qwen on,
+  Names: credsweeper, gitleaks, promptguard-rules, shell-aware, ml-span, ml-v9, ml-qwen.
+  ml-span runs the model repository's default bundle; ml-v9 is always v9.
+  With a model detector on, readiness defaults to 180000 ms; with ml-qwen on,
   the detector timeout defaults to 30000 ms. Same as PG_DETECTOR_ENABLE/DISABLE.
 
 Examples:
-  promptguard run --enable ml-v9
+  promptguard run --enable ml-span
   promptguard run --enable ml-qwen --disable shell-aware
   promptguard run --policy majority
 `)

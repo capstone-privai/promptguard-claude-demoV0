@@ -13,6 +13,14 @@ test('no options keeps the shipped selection and adds nothing', () => {
   assert.deepEqual(result.active, ['credsweeper', 'gitleaks', 'promptguard-rules', 'shell-aware'])
 })
 
+test('--enable ml-span is known and raises the readiness wait', () => {
+  const result = detectorEnvironment({ enable: 'ml-span' }, clean)
+  assert.equal(result.env.PG_DETECTOR_ENABLE, 'ml-span')
+  assert.equal(result.env.PG_READINESS_TIMEOUT_MS, '180000')
+  assert.ok(result.active.includes('ml-span'))
+  assert.ok(!result.active.includes('ml-v9'))
+})
+
 test('--enable ml-v9 turns it on and raises the readiness wait', () => {
   const result = detectorEnvironment({ enable: 'ml-v9' }, clean)
   assert.equal(result.env.PG_DETECTOR_ENABLE, 'ml-v9')
