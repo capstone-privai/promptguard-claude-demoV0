@@ -234,7 +234,8 @@ def load_detector(config_path: str | Path | None = None, consensus: Any = None) 
     names) switch entries on or off without editing the file; DISABLE wins. An
     adapter whose tool is missing aborts startup unless its entry sets
     ``"required": false``, in which case it is skipped and does not count as a
-    voter.
+    voter. An adapter named in ``PG_DETECTOR_ENABLE`` always aborts startup when
+    it cannot run.
     """
     path = Path(config_path or os.environ.get("PG_DETECTOR_CONFIG") or DEFAULT_CONFIG).resolve()
     config = json.loads(path.read_text(encoding="utf-8"))
@@ -258,7 +259,8 @@ def load_detector(config_path: str | Path | None = None, consensus: Any = None) 
             if entry.get("candidate_only", False):
                 candidate_only.append(name)
         except AdapterUnavailable as exc:
-            if entry.get("required", True):
+            # Asked for by name (--enable): starting without it would look like it is running.
+            if entry.get("required", True) or name in force_on:
                 raise
             skipped.append({"name": name, "reason": str(exc)})
             print(f"PromptGuard detector: optional adapter {name!r} skipped ({exc})", file=sys.stderr, flush=True)
