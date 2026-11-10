@@ -12,6 +12,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const RAW = 'MyS3cretPass!2026' // synthetic fixture value
 const PYTHON = process.env.PROMPTGUARD_PYTHON || path.join(ROOT, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
 const OUT = path.join(ROOT, '.runtime', 'e2e-restore')
+const PUBLIC_PREFIX = ['sk', 'live', ''].join('_')
+const PREFIXED_RAW = `${PUBLIC_PREFIX}SYNTHxFAKExVALUExONLYx0001` // synthetic fixture value
 const MODEL = 'claude-sonnet-4-5-20250929'
 
 const SCENARIOS = {
@@ -21,6 +23,15 @@ const SCENARIOS = {
   echo: { bash: ph => `printf '%s\\n' '${ph}'`, restore: 'on' },
   // Restore disabled: the command runs with the placeholder text itself.
   off: { bash: ph => `printf '%s' '${ph}' > restored-proof.txt && echo written`, restore: 'off' },
+  // Public prefix on: the model sees prefix + [TYPE_N], the command gets the whole value.
+  prefix: {
+    bash: ph => `printf '%s' '${ph}' > restored-proof.txt && echo written`,
+    restore: 'on',
+    raw: PREFIXED_RAW,
+    envLine: `STRIPE_SECRET_KEY=${PREFIXED_RAW}`,
+    pattern: /sk_live_\[STRIPE_SECRET_KEY_\d+\]/,
+    env: { PG_PLACEHOLDER_PUBLIC_PREFIX: 'on' },
+  },
 }
 
 function sse(res, id, blocks, stop) {
@@ -68,7 +79,7 @@ function startProvider(scenario, workspace) {
       const last = JSON.stringify(body.messages.at(-1).content)
       if (last.includes('toolu_read_env')) {
         // The "model" reuses the placeholder it saw in the masked Read result.
-        placeholder = last.match(/\[PASSWORD_\d+\]/)?.[0] ?? null
+        placeholder = last.match(scenario.pattern ?? /\[PASSWORD_\d+\]/)?.[0] ?? null
         return sse(res, id, [{ type: 'tool_use', id: 'toolu_bash_restore', name: 'Bash', input: { command: scenario.bash(placeholder ?? '[PASSWORD_MISSING]'), description: 'use the password' } }], 'tool_use')
       }
       if (last.includes('toolu_bash_restore')) return sse(res, id, [{ type: 'text', text: 'Finished.' }], 'end_turn')
@@ -92,7 +103,7 @@ function run(command, args, options) {
 
 async function startDetector() {
   const port = 30001 + Math.floor(Math.random() * 5000)
-  const env = { ...process.env, PG_DETECTOR_PORT: String(port), PG_DETECTOR_MODE: 'normal' }
+  const env = { ...process.env, PG_DETECTOR_PORT: String(port), PG_DETECTOR_MODE: 'normal', PG_PLACEHOLDER_PUBLIC_PREFIX: 'on' }
   const child = spawn(PYTHON, [path.join(ROOT, 'src/detector/worker.py')], { cwd: ROOT, env, stdio: 'ignore' })
   const url = `http://127.0.0.1:${port}`
   for (let i = 0; i < 200; i++) {
@@ -116,11 +127,12 @@ function bashBlocks(body) {
 }
 
 async function runScenario(name, scenario, detector) {
+  const RAW_VALUE = scenario.raw ?? RAW
   const dir = path.join(OUT, name)
   fs.rmSync(dir, { recursive: true, force: true })
   const workspace = path.join(dir, 'ws')
   fs.mkdirSync(workspace, { recursive: true })
-  fs.writeFileSync(path.join(workspace, '.env'), `DB_HOST=demo-db.internal\nDB_PASSWORD=${RAW}\n`)
+  fs.writeFileSync(path.join(workspace, '.env'), `DB_HOST=demo-db.internal\n${scenario.envLine ?? `DB_PASSWORD=${RAW}`}\n`)
   const mcpConfig = path.join(dir, 'mcp.json')
   fs.writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { pgdetector: { command: 'node', args: [path.join(ROOT, 'src/detector/mcp-bridge.cjs')] } } }))
 
@@ -138,6 +150,7 @@ async function runScenario(name, scenario, detector) {
     PG_DETECTOR_URL: detector.url,
     PG_SESSION_HASH: 'e2e',
     PG_RESTORE_PLACEHOLDERS: scenario.restore,
+    ...(scenario.env ?? {}),
   })
   // The detector bridge is an MCP tool; without this grant $.mcp.call is refused.
   const common = ['--plugin-dir', path.join(ROOT, 'src/native-mod'), '--mcp-config', mcpConfig, '--allowedTools', 'Read', 'Bash', 'mcp__pgdetector__scan_batch', '--output-format', 'json', '--model', MODEL]
@@ -165,10 +178,14 @@ async function runScenario(name, scenario, detector) {
     read_result_masked: ph !== null,
     provider_requests_after_bash: afterBash.length > 0,
     second_turn_sent: turn2.length > 0,
-    no_raw_in_any_provider_request: !provider.requests.some(r => JSON.stringify(r.body ?? '').includes(RAW)),
-    history_tool_use_keeps_placeholder: blocks.toolUse?.includes(ph) === true && !blocks.toolUse.includes(RAW),
-    no_raw_in_local_transcript: !transcripts.some(f => fs.readFileSync(path.join(dir, 'claude-config', f), 'utf8').includes(RAW)),
-    no_raw_in_audit: ![...fs.readdirSync(dir)].filter(f => f.startsWith('audit-')).some(f => fs.readFileSync(path.join(dir, f), 'utf8').includes(RAW)),
+    no_raw_in_any_provider_request: !provider.requests.some(r => JSON.stringify(r.body ?? '').includes(RAW_VALUE)),
+    history_tool_use_keeps_placeholder: blocks.toolUse?.includes(ph) === true && !blocks.toolUse.includes(RAW_VALUE),
+    no_raw_in_local_transcript: !transcripts.some(f => fs.readFileSync(path.join(dir, 'claude-config', f), 'utf8').includes(RAW_VALUE)),
+    no_raw_in_audit: ![...fs.readdirSync(dir)].filter(f => f.startsWith('audit-')).some(f => fs.readFileSync(path.join(dir, f), 'utf8').includes(RAW_VALUE)),
+  }
+  if (name === 'prefix') {
+    checks.command_ran_with_whole_value = proof === RAW_VALUE
+    checks.audit_restored_count_1 = bashStarted.restored_count === 1
   }
   if (name === 'file') {
     checks.command_ran_with_raw_value = proof === RAW

@@ -301,6 +301,19 @@ describe('production-style Final Guard', { concurrency: 1 }, () => {
     assert.deepEqual(last.finding_types, ['TOKEN'])
   })
 
+  test('public prefix placeholder text passes and the whole value is still blocked', async () => {
+    const prefix = ['sk', 'live', ''].join('_')
+    const body = text => Buffer.from(JSON.stringify({ messages: [{ role: 'user', content: text }] }), 'utf8')
+    const masked = await providerRequest(body(`use ${prefix}[STRIPE_SECRET_KEY_1] for the call`))
+    assert.equal(masked.statusCode, 200)
+    assert.equal((await upstreamStatus()).request_count, 1)
+
+    const whole = await providerRequest(body(`use ${prefix}${MARKER} for the call`))
+    assert.equal(whole.statusCode, 422)
+    assert.equal(JSON.parse(whole.body).error.code, 'DETECTOR_FINDINGS')
+    assert.equal((await upstreamStatus()).request_count, 1)
+  })
+
   test('detector timeout, HTTP error, malformed output, and response mixing all fail closed', async () => {
     for (const [mode, expected] of [
       ['timeout', 'DETECTOR_TIMEOUT'],
