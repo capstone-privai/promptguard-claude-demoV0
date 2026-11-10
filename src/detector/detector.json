@@ -56,7 +56,10 @@
         "whole_text_chars": 2000,
         "window_lines": 2,
         "max_text_chars": 6000,
-        "too_long": "skip"
+        "too_long": "skip",
+        "scope": "cue",
+        "full_text_chars": 20000,
+        "full_timeout_seconds": 25
       }
     },
     {
@@ -75,7 +78,10 @@
         "whole_text_chars": 2000,
         "window_lines": 2,
         "max_text_chars": 6000,
-        "too_long": "skip"
+        "too_long": "skip",
+        "scope": "cue",
+        "full_text_chars": 20000,
+        "full_timeout_seconds": 25
       }
     },
     {

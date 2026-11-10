@@ -12,6 +12,8 @@ const POLICIES = new Set(['union', 'majority'])
 const ML_ADAPTERS = new Set(['ml-span', 'ml-v9', 'ml-qwen'])
 const ML_READINESS_MS = 180000
 const QWEN_DETECTOR_TIMEOUT_MS = 30000
+const SCOPE_MODELS = new Set(['ml-span', 'ml-v9'])
+const ML_SCOPES = new Set(['cue', 'full'])
 
 function names(value) {
   return String(value || '').split(',').map(item => item.trim()).filter(Boolean)
@@ -39,11 +41,14 @@ function detectorEnvironment(options, env = process.env) {
     throw new Error(`Unknown detector name(s): ${unknown.join(', ')}. Known: ${[...valid].join(', ')}.`)
   }
   if (options.policy && !POLICIES.has(options.policy)) throw new Error('--policy must be union or majority.')
+  const scope = options.mlScope ?? env.PG_ML_SCOPE
+  if (scope && !ML_SCOPES.has(scope)) throw new Error('--ml-scope must be cue or full.')
 
   const out = {}
   if (options.enable !== undefined) out.PG_DETECTOR_ENABLE = enable.join(',')
   if (options.disable !== undefined) out.PG_DETECTOR_DISABLE = disable.join(',')
   if (options.policy) out.PG_DETECTOR_CANDIDATE_POLICY = options.policy
+  if (options.mlScope) out.PG_ML_SCOPE = options.mlScope
   if (options.detectorTimeoutMs !== undefined) out.PG_DETECTOR_TIMEOUT_MS = positiveInteger(options.detectorTimeoutMs, '--detector-timeout-ms')
   if (options.readinessTimeoutMs !== undefined) out.PG_READINESS_TIMEOUT_MS = positiveInteger(options.readinessTimeoutMs, '--readiness-timeout-ms')
 
@@ -52,17 +57,20 @@ function detectorEnvironment(options, env = process.env) {
   const off = new Set(names(out.PG_DETECTOR_DISABLE ?? env.PG_DETECTOR_DISABLE))
   const active = adapters.filter(item => (item.enabled || on.has(item.name)) && !off.has(item.name)).map(item => item.name)
   if (!active.length) throw new Error('Every detector is disabled; enable at least one.')
+  const scoped = active.some(name => SCOPE_MODELS.has(name))
+  if (options.mlScope && !scoped) throw new Error('--ml-scope needs ml-span or ml-v9 to be on (for example --enable ml-span).')
 
   // Model adapters load slowly and Qwen scans take seconds: raise the waits
   // unless the user (option or environment) already chose them.
   if (active.some(name => ML_ADAPTERS.has(name)) && out.PG_READINESS_TIMEOUT_MS === undefined && !env.PG_READINESS_TIMEOUT_MS) {
     out.PG_READINESS_TIMEOUT_MS = String(ML_READINESS_MS)
   }
-  if (active.includes('ml-qwen') && out.PG_DETECTOR_TIMEOUT_MS === undefined && !env.PG_DETECTOR_TIMEOUT_MS) {
+  if ((active.includes('ml-qwen') || (scoped && scope === 'full')) && out.PG_DETECTOR_TIMEOUT_MS === undefined && !env.PG_DETECTOR_TIMEOUT_MS) {
     out.PG_DETECTOR_TIMEOUT_MS = String(QWEN_DETECTOR_TIMEOUT_MS)
   }
   const policy = out.PG_DETECTOR_CANDIDATE_POLICY || env.PG_DETECTOR_CANDIDATE_POLICY || 'config default'
-  return { env: out, active, summary: `Detectors: ${active.join(', ')} (policy: ${policy})` }
+  const scopeNote = scoped ? `, ML scope: ${scope || 'config default'}` : ''
+  return { env: out, active, summary: `Detectors: ${active.join(', ')} (policy: ${policy}${scopeNote})` }
 }
 
 module.exports = { detectorEnvironment, knownAdapters, names }

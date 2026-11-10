@@ -35,6 +35,28 @@ test('--enable ml-qwen also raises the detector timeout unless given', () => {
   assert.equal(detectorEnvironment({ enable: 'ml-qwen' }, { PG_DETECTOR_TIMEOUT_MS: '20000' }).env.PG_DETECTOR_TIMEOUT_MS, undefined)
 })
 
+test('--ml-scope full sets the scope and the longer detector wait', () => {
+  const result = detectorEnvironment({ enable: 'ml-span', mlScope: 'full' }, clean)
+  assert.equal(result.env.PG_ML_SCOPE, 'full')
+  assert.equal(result.env.PG_DETECTOR_TIMEOUT_MS, '30000')
+  assert.match(result.summary, /ML scope: full/)
+  assert.equal(detectorEnvironment({ enable: 'ml-v9', mlScope: 'full', detectorTimeoutMs: '45000' }, clean).env.PG_DETECTOR_TIMEOUT_MS, '45000')
+  assert.equal(detectorEnvironment({ enable: 'ml-v9' }, { PG_ML_SCOPE: 'full' }).env.PG_DETECTOR_TIMEOUT_MS, '30000')
+})
+
+test('--ml-scope cue keeps the normal wait', () => {
+  const result = detectorEnvironment({ enable: 'ml-span', mlScope: 'cue' }, clean)
+  assert.equal(result.env.PG_ML_SCOPE, 'cue')
+  assert.equal(result.env.PG_DETECTOR_TIMEOUT_MS, undefined)
+})
+
+test('--ml-scope is refused when invalid or with no model it applies to', () => {
+  assert.throws(() => detectorEnvironment({ enable: 'ml-span', mlScope: 'all' }, clean), /cue or full/)
+  assert.throws(() => detectorEnvironment({ mlScope: 'full' }, clean), /needs ml-span or ml-v9/)
+  assert.throws(() => detectorEnvironment({ enable: 'ml-qwen', mlScope: 'full' }, clean), /needs ml-span or ml-v9/)
+  assert.throws(() => detectorEnvironment({ enable: 'ml-span' }, { PG_ML_SCOPE: 'all' }), /cue or full/)
+})
+
 test('--disable wins over --enable and removes the detector', () => {
   const result = detectorEnvironment({ enable: 'ml-v9', disable: 'ml-v9,shell-aware' }, clean)
   assert.equal(result.env.PG_DETECTOR_DISABLE, 'ml-v9,shell-aware')
@@ -66,6 +88,7 @@ test('run options parse, including a list split by PowerShell', () => {
   assert.deepEqual(split.detector, { enable: 'ml-v9,ml-qwen', disable: 'shell-aware', policy: 'union' })
   assert.deepEqual(split.claudeArgs, ['--model', 'x'])
   assert.equal(parseRun(['--enable', 'ml-v9', '--no-claude']).noClaude, true)
+  assert.equal(parseRun(['--enable', 'ml-span', '--ml-scope', 'full']).detector.mlScope, 'full')
   assert.throws(() => parseRun(['--enable']), /requires a value/)
   assert.throws(() => parseRun(['--bogus']), /unknown run option/)
 })

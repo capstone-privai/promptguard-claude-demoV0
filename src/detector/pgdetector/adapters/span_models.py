@@ -216,6 +216,17 @@ class MLV9Adapter(_ModelRepoAdapter):
 
     def __init__(self, name: str, options: Mapping[str, Any], config_dir: Path, *, factory: Callable[..., Any] | None = None) -> None:
         super().__init__(name, options, config_dir)
+        # scope: "cue" keeps long_text as configured. "full" reads a text of up to full_text_chars whole, and leaves
+        # a longer one to cue windows so one huge output cannot take the whole timeout. PG_ML_SCOPE overrides it.
+        scope = str(os.environ.get("PG_ML_SCOPE") or options.get("scope", "cue"))
+        if scope not in {"cue", "full"}:
+            raise ValueError("scope must be 'cue' or 'full'")
+        self.scope = scope
+        if scope == "full":
+            self.long_text = "cue_windows"
+            self.whole_text_chars = int(options.get("full_text_chars", 20000))
+            if not os.environ.get("PG_ML_TIMEOUT_SECONDS"):
+                self.timeout = float(options.get("full_timeout_seconds", 25))
         checkpoint = self._bundle_path(options, "checkpoint", "privai_model.ml_span.runtime", "models/span-detector-v9")
         if factory is None:
             if not _real_weights(checkpoint / "model.safetensors"):
