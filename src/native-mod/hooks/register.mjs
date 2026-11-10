@@ -4,6 +4,13 @@ const counters = new Map()
 const vault = new Map()
 // raw value -> placeholder, for re-masking raw values that come back from restored tool runs.
 const reverseVault = new Map()
+// placeholder -> the public prefix left in front of it. Empty unless PG_PLACEHOLDER_PUBLIC_PREFIX=on.
+// The vault then holds only the rest of the value; ledger numbers and reverseVault still use the whole value.
+const publicPrefixes = new Map()
+let prefixTable = null
+const PREFIX_TABLE = '../../docs/PLACEHOLDER_PUBLIC_PREFIXES.md'
+// A shorter rest is too little to hide once the prefix is shown, so such a value is masked whole.
+const PUBLIC_PREFIX_MIN_REST = 16
 const PLACEHOLDER_PATTERN = /\[[A-Z0-9_]+_\d+\]/g
 // Tools that execute locally. Model-bound tools (Agent, WebFetch, ...) never get raw values.
 const RESTORE_TOOLS = new Set(['Bash', 'PowerShell', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Grep'])
@@ -34,15 +41,40 @@ function typeName(value) {
 function placeholder(finding, raw) {
   const key = finding.value_hash
   if (ledger.has(key)) return ledger.get(key)
-  const kind = typeName(finding.type)
+  const known = publicEntry(raw)
+  const kind = known ? known.type : typeName(finding.type)
   const next = (counters.get(kind) || 0) + 1
   counters.set(kind, next)
   const value = `[${kind}_${next}]`
   ledger.set(key, value)
-  vault.set(value, raw)
+  if (known) publicPrefixes.set(value, known.prefix)
+  vault.set(value, known ? raw.slice(known.prefix.length) : raw)
   if (!reverseVault.has(raw)) reverseVault.set(raw, value)
   return value
 }
+
+// Rows of docs/PLACEHOLDER_PUBLIC_PREFIXES.md, longest prefix first. Read once; a table that cannot be
+// read leaves it empty, which masks every value whole.
+async function loadPrefixTable($) {
+  if (prefixTable) return
+  prefixTable = []
+  if (await $.env.get('PG_PLACEHOLDER_PUBLIC_PREFIX') !== 'on') return
+  try {
+    const rows = String(await $.fs.read(`${$.plugin.root}/${PREFIX_TABLE}`)).split(/\r?\n/)
+    prefixTable = rows.flatMap(row => {
+      const cells = row.match(/^\|\s*`([^`]+)`\s*\|\s*([A-Z][A-Z0-9_]*)\s*\|/)
+      return cells ? [{ prefix: cells[1], type: cells[2] }] : []
+    }).sort((a, b) => b.prefix.length - a.prefix.length)
+  } catch { prefixTable = [] }
+}
+
+function publicEntry(raw) {
+  const entry = raw === undefined ? undefined : prefixTable?.find(row => raw.startsWith(row.prefix))
+  return entry && raw.length - entry.prefix.length >= PUBLIC_PREFIX_MIN_REST ? entry : null
+}
+
+const maskedForm = value => (publicPrefixes.get(value) || '') + value
+const secretPart = raw => raw.slice((publicPrefixes.get(reverseVault.get(raw)) || '').length)
 
 function mapStrings(value, fn) {
   if (typeof value === 'string') return fn(value)
@@ -56,11 +88,15 @@ function mapStrings(value, fn) {
 }
 
 // Swaps placeholders the model wrote back to their raw values. Unknown placeholders stay as is.
+// A placeholder with a public prefix gets only the rest when the prefix is in front of it, and the
+// whole value when the model dropped the prefix.
 function restoreText(text, counter) {
-  return text.replace(PLACEHOLDER_PATTERN, match => {
+  return text.replace(PLACEHOLDER_PATTERN, (match, offset) => {
     if (!vault.has(match)) return match
     counter.count++
-    return vault.get(match)
+    const prefix = publicPrefixes.get(match)
+    const inPlace = !prefix || (offset >= prefix.length && text.startsWith(prefix, offset - prefix.length))
+    return inPlace ? vault.get(match) : prefix + vault.get(match)
   })
 }
 
@@ -80,7 +116,7 @@ function remaskText(text, counter) {
     if (!out.includes(raw)) continue
     const parts = out.split(raw)
     counter.count += parts.length - 1
-    out = parts.join(reverseVault.get(raw))
+    out = parts.join(maskedForm(reverseVault.get(raw)))
   }
   return remaskPartial(out, counter)
 }
@@ -97,7 +133,8 @@ function remaskText(text, counter) {
 //   `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9` is 36 characters), and less than half of a long random
 //   value leaves the rest out of reach.
 // The marker ends in `_PART]`, outside PLACEHOLDER_PATTERN, so tool.call never restores a part to
-// the full value.
+// the full value. With a public prefix only the rest counts: it is the part that is secret, and the
+// prefix stays where it is in the text.
 //
 // A run made only of ordinary words is not masked as a part (the whole value still is). A password a
 // person chose (`password123!`, `my-super-secret-key`) shares its words with ordinary output, and
@@ -120,13 +157,14 @@ let partIndex = { size: -1, windows: new Map() }
 function partWindows() {
   if (partIndex.size === reverseVault.size) return partIndex.windows
   const windows = new Map()
-  for (const raw of reverseVault.keys()) {
+  for (const owner of reverseVault.keys()) {
+    const raw = secretPart(owner)
     if (raw.length < PART_MIN) continue
     for (let offset = 0; offset + PART_MIN <= raw.length; offset++) {
       const window = raw.slice(offset, offset + PART_MIN)
       const hits = windows.get(window)
-      if (hits) hits.push({ raw, offset })
-      else windows.set(window, [{ raw, offset }])
+      if (hits) hits.push({ raw, owner, offset })
+      else windows.set(window, [{ raw, owner, offset }])
     }
   }
   partIndex = { size: reverseVault.size, windows }
@@ -144,11 +182,11 @@ function remaskPartial(text, counter) {
     // A run starting here, extended as far as it keeps matching; the longest one that is long
     // enough for its value wins. Scanning left to right, the first hit of a run is its start.
     let best = null
-    for (const { raw, offset } of hits) {
+    for (const { raw, owner, offset } of hits) {
       let end = start + PART_MIN
       let at = offset + PART_MIN
       while (end < text.length && at < raw.length && text[end] === raw[at]) { end++; at++ }
-      if (end - start >= partMinLength(raw) && (!best || end > best.end)) best = { start, end, raw }
+      if (end - start >= partMinLength(raw) && (!best || end > best.end)) best = { start, end, raw: owner }
     }
     if (!best || WORDS_ONLY.test(text.slice(best.start, best.end))) continue
     spans.push(best)
@@ -173,7 +211,7 @@ function redactText(text, findings) {
     previousStart = finding.start
   }
   const placeholders = new Map()
-  for (const finding of [...ordered].reverse()) placeholders.set(finding, placeholder(finding, text.slice(finding.start, finding.end)))
+  for (const finding of [...ordered].reverse()) placeholders.set(finding, maskedForm(placeholder(finding, text.slice(finding.start, finding.end))))
   let out = text
   for (const finding of ordered) out = out.slice(0, finding.start) + placeholders.get(finding) + out.slice(finding.end)
   return out
@@ -282,6 +320,7 @@ function rebuild(value, byId, cursor = { value: 0 }) {
 }
 
 async function sanitize($, value, source, signal) {
+  await loadPrefixTable($)
   const entries = collectStrings(value, source)
   const scanned = await scanBatch($, entries, signal)
   const byId = new Map(scanned.items.map(item => [item.id, item.findings]))
