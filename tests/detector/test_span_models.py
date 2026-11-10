@@ -191,6 +191,37 @@ class SpanModelTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             MLV9Adapter("ml-v9", {**self.options, "long_text": "sometimes"}, ROOT, factory=lambda c, device: FakeV9(c, device))
 
+    def v9_scope(self, **options):
+        return self.v9_windows(timeout_seconds=4, **options)
+
+    def test_full_scope_reads_a_long_text_without_a_cue(self) -> None:
+        text = self.long_log(secret_at=200, secret_line=f"0200 the new one is {SECRET}\n")
+        self.assertGreater(len(text), 6000)
+        self.assertEqual(self.v9_scope().scan(text), [], "cue scope leaves it to the others")
+        adapter = self.v9_scope(scope="full")
+        self.assertEqual([text[r.start:r.end] for r in adapter.scan(text)], [SECRET])
+        self.assertEqual(adapter.model.read, [text])
+        self.assertEqual(adapter.timeout, 25)
+
+    def test_full_scope_past_its_limit_falls_back_to_cue_windows(self) -> None:
+        adapter = self.v9_scope(scope="full", full_text_chars=4000)
+        text = self.long_log(secret_at=200)
+        self.assertEqual([text[r.start:r.end] for r in adapter.scan(text)], [SECRET])
+        self.assertEqual(adapter.model.read[0].count("\n"), 5)
+
+    def test_scope_environment_wins_and_a_timeout_override_stays(self) -> None:
+        with mock.patch.dict(os.environ, {"PG_ML_SCOPE": "full"}):
+            self.assertEqual(self.v9_scope().whole_text_chars, 20000)
+        with mock.patch.dict(os.environ, {"PG_ML_SCOPE": "cue"}):
+            adapter = self.v9_scope(scope="full")
+            self.assertEqual((adapter.whole_text_chars, adapter.timeout), (2000, 4))
+        with mock.patch.dict(os.environ, {"PG_ML_SCOPE": "full", "PG_ML_TIMEOUT_SECONDS": "9"}):
+            self.assertEqual(self.v9_scope().timeout, 9)
+
+    def test_unknown_scope_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            self.v9_scope(scope="some")
+
     # Qwen
     def test_qwen_error_status_fails_closed(self) -> None:
         for error in ("invalid_json", "truncated", "inference_failed"):

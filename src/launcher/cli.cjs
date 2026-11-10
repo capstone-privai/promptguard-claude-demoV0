@@ -14,7 +14,8 @@ function usage() {
 Usage:
   promptguard run [--config FILE] [--runtime-dir DIR] [--no-claude]
                   [--enable NAMES] [--disable NAMES] [--policy union|majority]
-                  [--detector-timeout-ms N] [--readiness-timeout-ms N] [-- CLAUDE_ARGS...]
+                  [--ml-scope cue|full] [--detector-timeout-ms N] [--readiness-timeout-ms N]
+                  [-- CLAUDE_ARGS...]
   promptguard status [--config FILE] [--runtime-dir DIR] [--json]
   promptguard version
 
@@ -33,6 +34,10 @@ Detector options (run):
   --disable NAMES            Turn detectors off; wins over --enable.
   --policy union|majority    union: any detector's span is masked (default in detector.json).
                              majority: the original vote of the non-candidate-only detectors.
+  --ml-scope cue|full        How much text ml-span and ml-v9 read.
+                             cue: the whole text up to 2000 characters, then only lines near a credential word.
+                             full: the whole text up to 20000 characters, then as cue. Slower: the model
+                             timeout becomes 25 s and the detector timeout defaults to 30000 ms.
   --detector-timeout-ms N    How long Native Mod and Final Guard wait for a scan.
   --readiness-timeout-ms N   How long startup waits for the detector workers.
   Names: credsweeper, gitleaks, promptguard-rules, shell-aware, ml-span, ml-v9, ml-qwen.
@@ -44,6 +49,7 @@ Examples:
   promptguard run --enable ml-span
   promptguard run --enable ml-qwen --disable shell-aware
   promptguard run --policy majority
+  promptguard run --enable ml-span --ml-scope full
 `)
 }
 
@@ -79,6 +85,7 @@ function parseRun(args) {
       index += consumed
     }
     else if (item === '--policy') options.detector.policy = requireValue(args, index++, item)
+    else if (item === '--ml-scope') options.detector.mlScope = requireValue(args, index++, item)
     else if (item === '--detector-timeout-ms') options.detector.detectorTimeoutMs = requireValue(args, index++, item)
     else if (item === '--readiness-timeout-ms') options.detector.readinessTimeoutMs = requireValue(args, index++, item)
     else if (item === '--help' || item === '-h') options.help = true

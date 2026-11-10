@@ -39,6 +39,7 @@ cd sample-protected-project
 - 시작할 때 `Detectors: ...` 줄에 실제로 켜지는 모듈이 나온다. 이름을 잘못 쓰거나 전부 끄면 시작하지 않는다.
 - 모델 두 개를 같이 켜면 CPU를 나눠 써서 한 번 호출이 혼자일 때보다 오래 걸린다. `PG_ML_TIMEOUT_SECONDS`가 있으면 모든 모델 모듈의 `timeout_seconds`를 덮어쓴다.
 - 같은 동작을 환경변수(`PG_DETECTOR_ENABLE`, `PG_DETECTOR_DISABLE`, `PG_DETECTOR_CANDIDATE_POLICY`, `PG_READINESS_TIMEOUT_MS`, `PG_DETECTOR_TIMEOUT_MS`)로도 할 수 있다. 옵션이 환경변수보다 우선한다.
+- ml-span과 ml-v9가 읽는 범위는 `--ml-scope cue|full`로 고른다(환경변수 `PG_ML_SCOPE`). `cue`(기본)는 2,000자까지 통째로 읽고 더 긴 글은 단서 단어 주변 줄만 읽는다. `full`은 20,000자까지 통째로 읽고, 더 긴 글은 `cue`와 같이 처리한다. `full`은 느리다. 세훈 PC 기준 실제 저장소 글 20,000자에 호출당 약 4~6.4초가 걸리므로 모델 제한이 25초, 탐지기 대기가 30초(`--detector-timeout-ms`로 바꿀 수 있음)가 된다. 25초를 넘기면 다른 모델 오류와 같이 요청을 막는다. ml-qwen에는 적용되지 않는다.
 
 `promptguard status`의 detector 정보에서 `adapters`(켜진 모듈)와 `skipped`(건너뛴 모듈과 이유)를 확인한다.
 
@@ -58,6 +59,7 @@ cd sample-protected-project
 | `min_value_length` | 둘 다 | 6 | 모델이 찍은 스팬이 이보다 짧거나 평범한 영어 단어(of, by, option 등)면 버린다. 2026-10-30 시연 중 ml-v9가 "of", "by"를 비밀로 찍은 오탐 때문에 넣었다. 6자 미만 비밀번호는 모델로는 가리지 않는다(다른 모듈은 여전히 검사) |
 | `max_chunks`, `overlap_lines` | Qwen | 8, 1 | 입력 한도(4,096 토큰)를 넘는 텍스트를 줄 단위로 나누는 방식 |
 | `long_text` | 둘 다 | `whole` (코드 기본) / `cue_windows` (v9, detector.json) | `cue_windows`면 `whole_text_chars`(2000)자 이하 텍스트는 통째로, 더 긴 텍스트는 cue 단어가 있는 줄과 앞뒤 `window_lines`(2)줄만 모델에 보낸다. 이때 `max_text_chars`는 모델이 읽는 창들의 합이고, 넘으면 `too_long`을 따른다. v9는 CPU에서 2KB에 약 0.4초, 20KB에 4~9초가 걸려 4초 timeout을 넘겼고, 큰 도구 출력은 매번 막혔다(2026-11-05 측정) |
+| `scope` | ml-span, ml-v9 | `cue` | `full`이면 `full_text_chars`(20000)자까지 통째로 읽고, 더 긴 글은 단서 주변 방식으로 읽는다. 모델 제한은 `full_timeout_seconds`(25)가 된다. `PG_ML_SCOPE`와 `--ml-scope`가 이 값보다 우선하고, `PG_ML_TIMEOUT_SECONDS`는 제한 시간에서 계속 우선한다 |
 
 ## 동작 원칙
 
