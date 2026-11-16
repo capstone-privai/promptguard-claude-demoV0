@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -20,6 +21,23 @@ from .core import CANONICAL_TYPES, MAX_SPAN, normalize, value_hash
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "detector.json"
 Ballots = dict[str, list[RawFinding]]
 CANDIDATE_POLICIES = ("union", "majority")
+PUBLIC_PREFIX_TABLE = Path(__file__).resolve().parents[3] / "docs" / "PLACEHOLDER_PUBLIC_PREFIXES.md"
+PUBLIC_PREFIX_ROW = re.compile(r"^\|\s*`([^`]+)`\s*\|\s*([A-Z][A-Z0-9_]*)\s*\|", re.M)
+
+
+def public_placeholder_pattern() -> re.Pattern[str] | None:
+    """What the Native Mod writes with PG_PLACEHOLDER_PUBLIC_PREFIX=on: a prefix from the table and its [TYPE_N].
+
+    Rules see `API_KEY=sk_live_[STRIPE_SECRET_KEY_1]` as an assignment of a secret, so the Final Guard would block
+    masked text and the Mod would mask it again. None (option off, or no table) leaves every span as it was.
+    """
+    if os.environ.get("PG_PLACEHOLDER_PUBLIC_PREFIX") != "on":
+        return None
+    try:
+        rows = PUBLIC_PREFIX_ROW.findall(PUBLIC_PREFIX_TABLE.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    return re.compile("|".join(rf"{re.escape(prefix)}\[{kind}_\d+\]" for prefix, kind in rows)) if rows else None
 
 
 class Detector:
@@ -49,6 +67,7 @@ class Detector:
             self.required_votes = self.majority_required_votes
         self.skipped = [dict(item) for item in skipped]
         self.priority = {name: index for index, name in enumerate(names)}
+        self.public_placeholder = public_placeholder_pattern()
 
     @property
     def names(self) -> list[str]:
@@ -106,7 +125,8 @@ class Detector:
             valid[name] = []
             for finding in findings:
                 if 0 <= finding.start < finding.end <= len(text):
-                    valid[name].append(finding)
+                    if not (self.public_placeholder and self.public_placeholder.fullmatch(text, finding.start, finding.end)):
+                        valid[name].append(finding)
                 else:
                     errors.append("INVALID_OFFSET_RANGE")
         required = self.required_votes if required_votes is None else required_votes
