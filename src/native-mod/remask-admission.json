@@ -1,0 +1,23 @@
+{
+  "comment": "PG_REMASK_POLICY=admitted: a value found by one of these rules (adapter + rule id, as the detector reports them) is re-masked wherever it comes back, whatever its shape. Chosen from promptguard-data metric-detection/results/stage0_fp_20261115/rules.csv, format detection group, ML off: precision >= 0.90, at least 10 findings, solo false positives <= 2% of findings.",
+  "high_confidence_rules": [
+    { "adapter": "credsweeper", "rule_id": "PEM Private Key" },
+    { "adapter": "credsweeper", "rule_id": "Bearer Authorization" },
+    { "adapter": "credsweeper", "rule_id": "JSON Web Token" },
+    { "adapter": "credsweeper", "rule_id": "NTLM Token" },
+    { "adapter": "credsweeper", "rule_id": "PromptGuard Bearer Token" },
+    { "adapter": "credsweeper", "rule_id": "AWS Multi" },
+    { "adapter": "credsweeper", "rule_id": "PASETO Token" },
+    { "adapter": "credsweeper", "rule_id": "BASE64 Private Key" },
+    { "adapter": "credsweeper", "rule_id": "Slack Token" },
+    { "adapter": "credsweeper", "rule_id": "Azure Access Token" },
+    { "adapter": "credsweeper", "rule_id": "Google API Key" },
+    { "adapter": "credsweeper", "rule_id": "CURL User Password" },
+    { "adapter": "gitleaks", "rule_id": "private-key" },
+    { "adapter": "gitleaks", "rule_id": "jwt" },
+    { "adapter": "gitleaks", "rule_id": "curl-auth-header" },
+    { "adapter": "gitleaks", "rule_id": "gcp-api-key" },
+    { "adapter": "gitleaks", "rule_id": "slack-bot-token" },
+    { "adapter": "promptguard-rules", "rule_id": "pem-private-key" }
+  ]
+}
