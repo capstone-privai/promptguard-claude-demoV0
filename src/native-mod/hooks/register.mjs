@@ -2,8 +2,12 @@ const ledger = new Map()
 const counters = new Map()
 // placeholder -> raw value. Memory only: never audited, persisted, or sent to the model.
 const vault = new Map()
-// raw value -> placeholder, for re-masking raw values that come back from restored tool runs.
+// raw value -> placeholder, for re-masking raw values that come back from restored tool runs. With
+// PG_REMASK_POLICY=admitted only admitted values are here (see admitForRemask); the vault keeps them all.
 const reverseVault = new Map()
+// PG_REMASK_POLICY: "all" (default, every masked value) or "admitted". Read once per session.
+let remaskPolicy = null
+const REMASK_CONFIG = 'remask-admission.json'
 const PLACEHOLDER_PATTERN = /\[[A-Z0-9_]+_\d+\]/g
 // Tools that execute locally. Model-bound tools (Agent, WebFetch, ...) never get raw values.
 const RESTORE_TOOLS = new Set(['Bash', 'PowerShell', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Grep'])
@@ -40,8 +44,66 @@ function placeholder(finding, raw) {
   const value = `[${kind}_${next}]`
   ledger.set(key, value)
   vault.set(value, raw)
-  if (!reverseVault.has(raw)) reverseVault.set(raw, value)
   return value
+}
+
+// Re-mask admission. A detected span is always masked where it was found; this decides only whether the
+// value is masked again, without a detector, wherever it comes back (remaskText, remaskPartial). In the
+// stage-0 analysis (promptguard-data, ML off, format detection) 96,485 of 138,038 masked places were
+// such re-masks, 95,894 of them false positives: a low-precision rule's false positive (an identifier in
+// a long file) re-masked at every repeat. "admitted" keeps a value whose rule is trusted, whose shape is
+// a secret's, or that was restored into a command (its output may print it).
+async function loadRemaskPolicy($) {
+  if (remaskPolicy) return
+  remaskPolicy = { admitted: false, rules: new Set() }
+  if (await $.env.get('PG_REMASK_POLICY') !== 'admitted') return
+  try {
+    const config = JSON.parse(String(await $.fs.read(`${$.plugin.root}/${REMASK_CONFIG}`)))
+    const rules = config.high_confidence_rules.map(rule => `${rule.adapter}\n${rule.rule_id}`)
+    remaskPolicy = { admitted: true, rules: new Set(rules) }
+  } catch { /* an unreadable list keeps "all", the side that masks more */ }
+}
+
+function highConfidence(finding) {
+  const parts = String(finding.rule_id || '').split('+')
+  return (finding.detectors || []).some(adapter => parts.some(rule => remaskPolicy.rules.has(`${adapter}\n${rule}`)))
+}
+
+function admitForRemask(finding, raw, value) {
+  if (reverseVault.has(raw)) return
+  if (!remaskPolicy?.admitted || highConfidence(finding) || valueShape(raw) === 'secret_like') reverseVault.set(raw, value)
+}
+
+// The shape of a value, for admission (only secret_like is admitted by shape) and for the breakdown in
+// scripts/remask_admission (shapes.py gives the same answers; tests/fixtures/remask_shapes.json).
+const SHAPE_TEMPLATE = [/^<[^<>]+>$/, /^\{\{[\s\S]*\}\}$/, /^\{%[\s\S]*%\}$/, /^\[[A-Z0-9_]+\]$/, /^\*{3,}$/, /^x{3,}$/i, /^\.{3,}$/, /^#{3,}$/]
+const SHAPE_EXAMPLE = [
+  /^(?:changeme|change_me|changeit|example|sample|dummy|placeholder|redacted|password|secret|token|test|testing|none|null|undefined|default)\d*$/i,
+  /^your[-_ ]?.*[-_ ]here$/i,
+  /(?:^|[-_])(?:example|dummy|placeholder|changeme|fake|sample)(?:[-_]|$)/i,
+  /^(.)\1{5,}$/,
+]
+const SHAPE_REFERENCE = [/^\$\{[^}]+\}$/, /^\$[A-Za-z_]\w*$/, /^\$\([A-Za-z_]\w*\)$/, /^%[A-Za-z_]\w*%$/, /^(?:process\.env|os\.environ|os\.getenv|System\.getenv|ENV|getenv)\b/]
+const DOTTED = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+(?:\(\))?$/
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const NUMERIC = /^[+-]?[\d.,:\s_/-]+$/
+const HEX = /^(?:sha(?:1|224|256|384|512)[:-])?(?:0x)?[0-9a-f]+$/i
+const WORD_TOKEN = /^(?:[a-z]+|[A-Z]+|[A-Z][a-z]+)$/
+// Ordinary words, including joined into an identifier (buildCacheDirectory, DEPLOY_TARGET): no digit,
+// no symbol but - _ . and spaces. Wider than #16's WORDS_ONLY, which does not split camelCase.
+const wordy = value => value.split(/[-_. ]+|(?<=[a-z])(?=[A-Z])/).filter(Boolean).every(token => WORD_TOKEN.test(token))
+
+function valueShape(raw) {
+  const value = raw.trim()
+  if (value.length < 8) return 'short'
+  if (SHAPE_TEMPLATE.some(pattern => pattern.test(value))) return 'template'
+  if (SHAPE_EXAMPLE.some(pattern => pattern.test(value))) return 'example'
+  if (SHAPE_REFERENCE.some(pattern => pattern.test(value)) || (DOTTED.test(value) && value.replace(/\(\)$/, '').split('.').every(wordy))) return 'reference'
+  if (UUID.test(value)) return 'uuid'
+  if (NUMERIC.test(value) && /\d/.test(value)) return 'numeric'
+  if (HEX.test(value) && (/\d/.test(value) || value.length >= 16)) return 'hex'
+  if (WORDS_ONLY.test(value) || wordy(value)) return 'words'
+  return 'secret_like'
 }
 
 function mapStrings(value, fn) {
@@ -56,11 +118,14 @@ function mapStrings(value, fn) {
 }
 
 // Swaps placeholders the model wrote back to their raw values. Unknown placeholders stay as is.
+// A restored value goes on the re-mask list whatever the policy: the command may print it.
 function restoreText(text, counter) {
   return text.replace(PLACEHOLDER_PATTERN, match => {
     if (!vault.has(match)) return match
     counter.count++
-    return vault.get(match)
+    const raw = vault.get(match)
+    if (!reverseVault.has(raw)) reverseVault.set(raw, match)
+    return raw
   })
 }
 
@@ -173,7 +238,12 @@ function redactText(text, findings) {
     previousStart = finding.start
   }
   const placeholders = new Map()
-  for (const finding of [...ordered].reverse()) placeholders.set(finding, placeholder(finding, text.slice(finding.start, finding.end)))
+  for (const finding of [...ordered].reverse()) {
+    const raw = text.slice(finding.start, finding.end)
+    const value = placeholder(finding, raw)
+    admitForRemask(finding, raw, value)
+    placeholders.set(finding, value)
+  }
   let out = text
   for (const finding of ordered) out = out.slice(0, finding.start) + placeholders.get(finding) + out.slice(finding.end)
   return out
@@ -282,6 +352,7 @@ function rebuild(value, byId, cursor = { value: 0 }) {
 }
 
 async function sanitize($, value, source, signal) {
+  await loadRemaskPolicy($)
   const entries = collectStrings(value, source)
   const scanned = await scanBatch($, entries, signal)
   const byId = new Map(scanned.items.map(item => [item.id, item.findings]))

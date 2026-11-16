@@ -143,6 +143,8 @@ Claude Code에서 `!`로 직접 실행한 명령과 그 출력은 `prompt.submit
 
 원복을 끄려면 `PG_RESTORE_PLACEHOLDERS=off`를 지정합니다. re-mask는 그대로 동작합니다.
 
+`PG_REMASK_POLICY=admitted`이면 다시 나온 값을 탐지기 없이 가리는 재마스킹을 믿을 만한 값에만 적용합니다. 기본은 `all`(지금 동작)이고, 기준은 [재마스킹 입장 기준](docs/REMASK_ADMISSION.md)에 있습니다.
+
 ### 원복한 값이 모델로 다시 실려 가는가? (E2E 검증)
 
 실제 Claude Code CLI + Native Mod + detector worker를 가짜 Anthropic API에 연결해, provider로 나가는 요청을 전부 기록하고 확인했습니다 (Claude Code 2.1.296에서 확인).
