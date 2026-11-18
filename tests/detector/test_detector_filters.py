@@ -67,14 +67,17 @@ SHAPES = [
     ("password hash", "$6$SYNTHsalt$SYNTHhashvalue", None),
 ]
 # Explicit example and dummy values: only with PG_DETECTOR_FILTER_DUMMY=on.
-DUMMIES = ["changeme", "CHANGE_ME", "your_api_key_here", "your-password-here", "<password>", "<YOUR_TOKEN>", "<your-api-key>",
-           "xxxxxxxx", "********", "REDACTED", "[redacted]", "placeholder", "dummy", "replace_me", "insert_token_here"]
+# Placeholder shapes only. Weak default passwords (changeme) are real values to mask (labeling guide, decision 3).
+DUMMIES = ["your_api_key_here", "your-password-here", "<password>", "<YOUR_TOKEN>", "<your-api-key>",
+           "xxxxxxxx", "********", "REDACTED", "[redacted]", "placeholder", "replaceme", "replace_me", "insert_token_here"]
 # Real passwords with look-alike characters: never filtered.
 REAL = ["p@ss(w0rd", "Tr0ub&dor", "a<b>c!9", "password123", "Hello(World)1", "my&lt!pass9", "Secret[2024]x", "{SYNTH}9!q",
         "Summer2024.Pass", "x9#{q}Z", "Pa55word!", "letmein2026", "admin123", "qwerty!7",
         # found by review of #23: brackets that close but hold no code, and CSS look-alikes
         "Xk9(mZ!q#2)", "S3cr3t(!)", "Hunter(2)", "Summer[2024]", "Pass(12, 34)", "Key[0x1f]",
-        "var(Xk9!q", "url(Xk9!q)", "calc(Xk9!)", "rgba(Xk9!)", "19951231s", "300ms", "12deg"]
+        "var(Xk9!q", "url(Xk9!q)", "calc(Xk9!)", "rgba(Xk9!)", "19951231s", "300ms", "12deg",
+        # weak default passwords are values to mask, not placeholders (labeling guide, decision 3)
+        "changeme", "CHANGEME", "change_me", "change-me", "changeit", "dummy"]
 
 
 class Stub(DetectorAdapter):

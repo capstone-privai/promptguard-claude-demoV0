@@ -13,8 +13,9 @@ code fragments (&lt;, </p>, function(, attributes[, :unset) found once and re-ma
                  identifiers, attribute references and string literals (get_token(), options['x'])
 - css_value      CSS keywords, px/em/rem/vh/vw/% lengths, and closed CSS functions holding CSS values (var(--x))
 - template       {{ }}, {% %}, ${ }, #{ }, <db-password>, %(name)s, {name}, and PromptGuard's own [TYPE_N]
-- dummy_value    (PG_DETECTOR_FILTER_DUMMY=on, separately) an exact list of example values (changeme, <password>) and
-                 the explicit forms your_*_here, <your-*>, xxx, ***; never a common real password such as password123
+- dummy_value    (PG_DETECTOR_FILTER_DUMMY=on, separately) placeholder shapes only: an exact list (<password>,
+                 replace_me, placeholder) and the forms your_*_here, <your-*>, xxx, ***; never a weak default or common
+                 real password such as changeme or password123
 
 Findings of a high-confidence rule (src/detector/high-confidence-rules.json, shared with the Native Mod) are never
 filtered. Only the count per filter name is reported; no value is kept.
@@ -68,8 +69,10 @@ _TEMPLATE = re.compile(
     r"|<(?![Yy][Oo][Uu][Rr][-_ ])[A-Za-z][\w]*(?:[-_ ][\w]+)+>|\[[A-Z][A-Z0-9_]*_\d+(?:_PART)?\]"
 )
 _DUMMY_EXACT = {
-    "changeme", "change_me", "change-me", "changeit", "replaceme", "replace_me", "replace-me", "placeholder",
-    "dummy", "redacted", "[redacted]", "<redacted>", "<password>", "<secret>", "<token>", "<api_key>", "<apikey>",
+    # Placeholder shapes only. Weak default passwords (changeme, change_me, changeit, dummy) are real values to
+    # mask: promptguard-data's labeling guide, decision 3.
+    "replaceme", "replace_me", "replace-me", "placeholder",
+    "redacted", "[redacted]", "<redacted>", "<password>", "<secret>", "<token>", "<api_key>", "<apikey>",
     "<key>", "your_password", "yourpassword", "your_token", "your_secret", "your_api_key", "your-api-key",
 }
 _DUMMY_PATTERN = re.compile(
