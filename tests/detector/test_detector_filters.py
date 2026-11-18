@@ -33,10 +33,17 @@ SHAPES = [
     ("code expression: open index", "attributes[", "code_fragment"),
     ("code expression: method call", "os.getenv(", "code_fragment"),
     ("code expression: index", "options['password']", "code_fragment"),
+    ("code expression: call with references", "get_config(name, self.region)", "code_fragment"),
+    ("code expression: call with a string", 'os.getenv("API_KEY")', "code_fragment"),
+    ("code expression: empty index", "items[]", "code_fragment"),
     ("CSS value: keyword", ":unset", "css_value"),
     ("CSS value: important", "!important", "css_value"),
     ("CSS value: length", "12px", "css_value"),
+    ("CSS value: percent", "50%", "css_value"),
     ("CSS value: function", "rgba(0,0,0,0.5)", "css_value"),
+    ("CSS value: custom property", "var(--main-color)", "css_value"),
+    ("CSS value: calc", "calc(100% - 12px)", "css_value"),
+    ("CSS value: url", "url(images/bg.png)", "css_value"),
     ("template: jinja", "{{ secrets.DEPLOY_KEY }}", "template"),
     ("template: jinja block", "{% raw %}", "template"),
     ("template: shell", "${DB_PASSWORD}", "template"),
@@ -64,7 +71,10 @@ DUMMIES = ["changeme", "CHANGE_ME", "your_api_key_here", "your-password-here", "
            "xxxxxxxx", "********", "REDACTED", "[redacted]", "placeholder", "dummy", "replace_me", "insert_token_here"]
 # Real passwords with look-alike characters: never filtered.
 REAL = ["p@ss(w0rd", "Tr0ub&dor", "a<b>c!9", "password123", "Hello(World)1", "my&lt!pass9", "Secret[2024]x", "{SYNTH}9!q",
-        "Summer2024.Pass", "x9#{q}Z", "Pa55word!", "letmein2026", "admin123", "qwerty!7"]
+        "Summer2024.Pass", "x9#{q}Z", "Pa55word!", "letmein2026", "admin123", "qwerty!7",
+        # found by review of #23: brackets that close but hold no code, and CSS look-alikes
+        "Xk9(mZ!q#2)", "S3cr3t(!)", "Hunter(2)", "Summer[2024]", "Pass(12, 34)", "Key[0x1f]",
+        "var(Xk9!q", "url(Xk9!q)", "calc(Xk9!)", "rgba(Xk9!)", "19951231s", "300ms", "12deg"]
 
 
 class Stub(DetectorAdapter):
@@ -153,6 +163,18 @@ class Filters(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+class Settings(unittest.TestCase):
+    def test_describe_reports_the_setting_names_only(self) -> None:
+        for env, expected in (({}, {"PG_DETECTOR_FILTERS": "off", "PG_DETECTOR_FILTER_DUMMY": "off"}),
+                              ({**ON, **DUMMY}, {"PG_DETECTOR_FILTERS": "on", "PG_DETECTOR_FILTER_DUMMY": "on"})):
+            with mock.patch.dict(os.environ, env):
+                if not env:
+                    os.environ.pop("PG_DETECTOR_FILTERS", None)
+                    os.environ.pop("PG_DETECTOR_FILTER_DUMMY", None)
+                detector = Detector([Stub("credsweeper", "x")], ConsensusPolicy.parse("any"), candidate_policy="union")
+                self.assertEqual(detector.describe()["filter_settings"], expected)
+
+
 class SecretAssignment(unittest.TestCase):
     """promptguard-rules secret-assignment: a value that is a reference, a call, code or a template is not a secret."""
 
@@ -167,6 +189,9 @@ class SecretAssignment(unittest.TestCase):
         "api_token = request.headers[",
         "password={{vault_password}}",
         "secret_key = %(secret_key)s",
+        # a template stays a template inside quotes
+        'password = "{{vault_password}}"',
+        "secret_key = '%(secret_key)s'",
     ]
     KEPT = [
         "password = p@ss(w0rd",
@@ -174,6 +199,13 @@ class SecretAssignment(unittest.TestCase):
         "password = Summer2024.Pass",
         "password = MyS3cret!(x)",
         "secret = SYNTHx7Qk2mR9vL4wPz",
+        # a quoted value is a string literal, not a reference or code
+        'master_key_password = "Admin.Master.Key"',
+        "secret = 'alpha.bravo.charlie'",
+        'token = "get_token()"',
+        "api_key = 'settings.SECRET_KEY'",
+        "password = Hunter(2)",
+        "password = Xk9(mZ!q#2)",
     ]
 
     def found(self, text: str, env: dict[str, str]) -> int:
@@ -193,7 +225,7 @@ class SecretAssignment(unittest.TestCase):
             detector = Detector([PatternAdapter("promptguard-rules", {"min_value_length": 8}, ROOT)], ConsensusPolicy.parse("any"), candidate_policy="union")
             result = detector.scan("\n".join(self.CODE), "tool_result")
         self.assertEqual(result["finding_count"], 0)
-        self.assertEqual(result["filtered"], {"assignment_code": 5, "assignment_reference": 3, "assignment_template": 2})
+        self.assertEqual(result["filtered"], {"assignment_code": 5, "assignment_reference": 3, "assignment_template": 4})
 
     def test_real_values_are_still_found(self) -> None:
         for text in self.KEPT:

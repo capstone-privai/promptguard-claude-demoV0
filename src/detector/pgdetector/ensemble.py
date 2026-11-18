@@ -18,7 +18,7 @@ from .adapter import AdapterUnavailable, DetectorAdapter, RawFinding
 from .adapters import ADAPTER_TYPES
 from .consensus import ConsensusPolicy, vote
 from .core import CANONICAL_TYPES, MAX_SPAN, normalize, value_hash
-from .filters import Filters
+from .filters import Filters, filter_settings
 from .verifier import VerifierStage
 
 
@@ -103,6 +103,7 @@ class Detector:
             "verifier": self.verifier.describe() if self.verifier is not None else None,
             "skipped": self.skipped,
             **(self.filters.describe() if self.filters else {}),
+            "filter_settings": filter_settings(),
         }
 
     def collect(self, texts: Sequence[str]) -> tuple[list[Ballots], list[str]]:
