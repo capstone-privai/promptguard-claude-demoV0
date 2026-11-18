@@ -16,7 +16,7 @@ from typing import Any, Mapping, Sequence
 
 from ..adapter import DetectorAdapter, RawFinding
 from ..core import BENIGN_VARIABLES, pem_body_lines
-from ..filters import CLOSED_CALL, assignment_value_is_code, key_name
+from ..filters import CLOSED_CALL, assignment_value_is_code, lookup_default_is_value, lookup_key
 
 
 # (rule_id, type, lower-case literals one of which every match contains, pattern
@@ -49,7 +49,7 @@ PLACEHOLDER = re.compile(
 )
 # An env or config lookup with a quoted default, from the assignment's value on.
 DEFAULT_CALL = re.compile(
-    r"(?:os\.getenv|os\.environ\.get|config\.get)\(\s*(?:\"[^\"\n]*\"|'[^'\n]*'|[A-Za-z_][\w.]*)\s*,\s*"
+    r"(?:os\.getenv|os\.environ\.get|config\.get)\(\s*(?P<key>\"[^\"\n]*\"|'[^'\n]*'|[A-Za-z_][\w.]*)\s*,\s*"
     r"(?P<quote>[\"'])(?P<default>[^\"'\n]*)(?P=quote)"
 )
 DEFAULT_OR = re.compile(r"process\.env\.[A-Za-z_]\w*\s*(?:\|\||\?\?)\s*(?P<quote>[\"'`])(?P<default>[^\"'`\n]*)(?P=quote)")
@@ -120,6 +120,8 @@ class PatternAdapter(DetectorAdapter):
         # PG_DETECTOR_FILTERS=on: secret-assignment skips a value that is a reference, a call, code or a template,
         # and counts it by reason for the ensemble (declined), per text of this thread's batch.
         self.skip_code_values = os.environ.get("PG_DETECTOR_FILTERS") == "on"
+        # PG_DETECTOR_FILTER_DUMMY=on: a lookup default that is a placeholder (<password>) is not a candidate.
+        self.dummy_on = os.environ.get("PG_DETECTOR_FILTER_DUMMY") == "on"
         self._batch = threading.local()
 
     def scan_many(self, texts: Sequence[str]) -> list[list[RawFinding]]:
@@ -156,15 +158,21 @@ class PatternAdapter(DetectorAdapter):
             start, end = value.start(), value_end(text, *value.span())
             # The quoted default of an env or config lookup (os.getenv("DB_PASS", "<secret>"), process.env.X || "...")
             # is a candidate of its own, with the filters on or off. os.environ.get and process.env were never read
-            # before (PLACEHOLDER), so this widens detection apart from the filters.
+            # before (PLACEHOLDER), so this widens detection apart from the filters. Only the first argument must be a
+            # key name; the default is a value whatever its shape (changeme, admin), but for lookup_default_is_value's
+            # exceptions. The call itself (os.getenv() is then not reported, filters on or off.
             default = DEFAULT_CALL.match(text, start) or DEFAULT_OR.match(text, start)
-            has_default = False
+            if default and "key" in default.groupdict() and not lookup_key(default.group("key")):
+                default = None
             if default:
                 d_start, d_end = default.span("default")
-                literal = text[d_start:d_end]
-                if self._plausible(literal) and not key_name(literal) and not claimed.overlaps(d_start, d_end):
+                if lookup_default_is_value(text[d_start:d_end], self.dummy_on) and not claimed.overlaps(d_start, d_end):
                     findings.append(RawFinding(d_start, d_end, finding_type, "secret-assignment", "moderate"))
-                    has_default = True
+                    if self.skip_code_values:
+                        declined = getattr(self._batch, "declined", None)
+                        if declined:
+                            declined[-1]["assignment_code"] += 1
+                    continue
             if not self._plausible(text[start:end]):
                 continue
             # ASSIGNMENT takes the opening quote, so a quoted value has its quote right before and after it.
@@ -175,10 +183,7 @@ class PatternAdapter(DetectorAdapter):
             # argument that is not a key name keeps it.
             call = CLOSED_CALL.match(text, start)
             judged = call.group() if call and call.end() > end else text[start:end]
-            if self.skip_code_values and has_default and not quoted:
-                reason: str | None = "assignment_code"  # the lookup's secret is the default candidate above
-            else:
-                reason = assignment_value_is_code(judged, quoted) if self.skip_code_values else None
+            reason = assignment_value_is_code(judged, quoted) if self.skip_code_values else None
             if reason:
                 declined = getattr(self._batch, "declined", None)
                 if declined:

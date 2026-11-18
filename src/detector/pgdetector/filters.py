@@ -100,6 +100,10 @@ def html_fragment(value: str) -> bool:
 
 
 def code_fragment(value: str) -> bool:
+    # A lookup's default is a value even when shaped like a key name (os.getenv("DB_PASS", "changeme")).
+    lookup = _LOOKUP.fullmatch(value)
+    if lookup and lookup_key(lookup.group("key")) and lookup_default_is_value(lookup.group("default")):
+        return False
     return bool(_CODE.fullmatch(value))
 
 
@@ -195,6 +199,26 @@ def reference(value: str) -> bool:
 def key_name(value: str) -> bool:
     """An environment variable name or dotted lower-case words, not a value: DB_PASS, db.password."""
     return bool(re.fullmatch(_KEY_NAME, value)) and not re.fullmatch(r"[0-9a-fA-F]{8,}", value)
+
+
+# An env or config lookup with a quoted default. Only the first argument is a key; the second is a value.
+_LOOKUP = re.compile(
+    rf"(?:os\.getenv|os\.environ\.get|config\.get)\(\s*(?P<key>\"[^\"\n]*\"|'[^'\n]*'|{_IDENT})\s*,\s*"
+    r"(?P<quote>[\"'])(?P<default>[^\"'\n]*)(?P=quote)\s*\)?"
+)
+_NO_VALUE = {"none", "null", "undefined"}
+
+
+def lookup_key(key: str) -> bool:
+    """A lookup's first argument: an identifier, or a quoted key name."""
+    return key[:1] not in "\"'" or key_name(key[1:-1])
+
+
+def lookup_default_is_value(default: str, dummy: bool = False) -> bool:
+    """A lookup's default is a value whatever its shape (changeme, admin, DEFAULT_PASS), except an empty string,
+    None/null/undefined, a template (${X}) and, with PG_DETECTOR_FILTER_DUMMY=on, a dummy_value placeholder."""
+    value = default.strip()
+    return bool(value) and value.lower() not in _NO_VALUE and not template(value) and not (dummy and dummy_value(value))
 
 
 def assignment_value_is_code(raw: str, quoted: bool = False) -> str | None:
