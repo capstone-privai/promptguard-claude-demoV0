@@ -29,6 +29,7 @@ source/sink semantics, and never logs or retains candidate values.
 from __future__ import annotations
 
 import bisect
+import os
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -315,6 +316,15 @@ class ShellAwareAdapter(DetectorAdapter):
     def __init__(self, name: str, options: Mapping[str, Any], config_dir: Path) -> None:
         super().__init__(name, options, config_dir)
         self.min_value_length = max(1, int(options.get("min_value_length", 1)))
+        # PG_SHELL_POSITIONAL_MIN (default 1, today's behaviour): a positional literal that only a credential-named
+        # function makes a candidate must be at least this long; 4 is CredSweeper's minimum. On the CredData-
+        # trajectory test, CreateOrUpdateEnvSecret(ctx, 1, "e", input) gave "e", which the Native Mod then
+        # re-masked inside every hex key. Keyword arguments and the command-flag rules keep min_value_length.
+        try:
+            positional_min = int(os.environ.get("PG_SHELL_POSITIONAL_MIN") or 1)
+        except ValueError:
+            positional_min = 1
+        self.positional_min = positional_min if positional_min >= 1 else 1
 
     def scan(self, text: str) -> list[RawFinding]:
         output: list[RawFinding] = []
@@ -557,7 +567,7 @@ class ShellAwareAdapter(DetectorAdapter):
             # A credential-named keyword argument is evidence on its own; a
             # positional literal needs a credential-meaning function name.
             chosen = [(item, "strong") for item in keyword_hits]
-            if not chosen and cue_name and positional:
+            if not chosen and cue_name and positional and len(positional[-1][1]) >= self.positional_min:
                 chosen = [(positional[-1], "strong" if strong_name else "ambiguous")]
             for (start, value), strength in chosen:
                 if not plausible(value):

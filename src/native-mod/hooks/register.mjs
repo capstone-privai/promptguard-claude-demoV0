@@ -11,6 +11,11 @@ let prefixTable = null
 const PREFIX_TABLE = '../../docs/PLACEHOLDER_PUBLIC_PREFIXES.md'
 // A shorter rest is too little to hide once the prefix is shown, so such a value is masked whole.
 const PUBLIC_PREFIX_MIN_REST = 16
+// PG_REMASK_SHORT: "substring" (default, today's behaviour) or "boundary". Read once per session in sanitize.
+let remaskShort = null
+// boundary: a known value shorter than this is re-masked only where it stands as a word.
+const SHORT_REMASK = 8
+const WORD_CHAR = '[A-Za-z0-9_]'
 const PLACEHOLDER_PATTERN = /\[[A-Z0-9_]+_\d+\]/g
 // Tools that execute locally. Model-bound tools (Agent, WebFetch, ...) never get raw values.
 const RESTORE_TOOLS = new Set(['Bash', 'PowerShell', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Grep'])
@@ -109,14 +114,26 @@ function restoreToolInput(e) {
 
 // Replaces known raw values with their placeholders, even where the detector would miss them
 // (e.g. a restored password echoed alone on a line). Longest first so substrings never win.
+//
+// With PG_REMASK_SHORT=boundary a value shorter than SHORT_REMASK characters is replaced only where no
+// [A-Za-z0-9_] stands right before or after it. A short value found once (shell-aware's "e" in
+// CreateOrUpdateEnvSecret(ctx, 1, "e", input), CredData-trajectory test) was otherwise masked inside every word
+// and hex key that contains it. Any other character, Hangul included, is a boundary: "비밀번호는mgb입니다" still
+// masks mgb. Longer values and remaskPartial are unchanged.
 function remaskText(text, counter) {
   if (!reverseVault.size) return text
   let out = text
   for (const raw of [...reverseVault.keys()].sort((a, b) => b.length - a.length)) {
     if (!out.includes(raw)) continue
+    const replacement = maskedForm(reverseVault.get(raw))
+    if (remaskShort === 'boundary' && raw.length < SHORT_REMASK) {
+      const word = new RegExp(`(?<!${WORD_CHAR})${raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!${WORD_CHAR})`, 'g')
+      out = out.replace(word, () => { counter.count++; return replacement })
+      continue
+    }
     const parts = out.split(raw)
     counter.count += parts.length - 1
-    out = parts.join(maskedForm(reverseVault.get(raw)))
+    out = parts.join(replacement)
   }
   return remaskPartial(out, counter)
 }
@@ -320,6 +337,7 @@ function rebuild(value, byId, cursor = { value: 0 }) {
 }
 
 async function sanitize($, value, source, signal) {
+  if (remaskShort === null) remaskShort = await $.env.get('PG_REMASK_SHORT') === 'boundary' ? 'boundary' : 'substring'
   await loadPrefixTable($)
   const entries = collectStrings(value, source)
   const scanned = await scanBatch($, entries, signal)
