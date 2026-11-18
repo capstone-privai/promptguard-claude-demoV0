@@ -22,7 +22,7 @@
 | | `css_value` | 모든 탐지기: CSS 키워드, `px`·`em`·`rem`·`vh`·`vw`·`%` 길이, 닫는 괄호까지 있고 안이 CSS 값인 함수 | `:unset`, `!important`, `12px`, `50%`, `rgba(0,0,0,0.5)`, `var(--main-color)`, `calc(100% - 12px)` |
 | | `template` | 모든 탐지기: 템플릿과 자리표시자 | `{{ x }}`, `{% x %}`, `${X}`, `#{x}`, `<db-password>`, `%(x)s`, `{x}`, `[PASSWORD_1]` |
 | | `code_fragment` | 모든 탐지기: `(`나 `[`로 끝나는 식별자, 또는 닫혔는데 안에 코드만 있는 호출·인덱스(아래) | `function(`, `attributes[`, `get_token()`, `options['password']`, `get_config(name, self.region)` |
-| `PG_DETECTOR_FILTER_DUMMY=on` (따로) | `dummy_value` | 모든 탐지기: 정확히 일치하는 목록과 명시적 패턴만 | `changeme`, `<password>`, `your_api_key_here`, `<your-token>`, `xxxxxxxx`, `********`, `REDACTED` |
+| `PG_DETECTOR_FILTER_DUMMY=on` (따로) | `dummy_value` | 모든 탐지기: 자리표시 모양만 (정확히 일치하는 목록과 명시적 패턴) | `<password>`, `replace_me`, `your_api_key_here`, `<your-token>`, `xxxxxxxx`, `********`, `REDACTED` |
 
 **어떤 값을 거르고 어떤 값을 남기나**
 
@@ -32,7 +32,7 @@
 - **CSS 길이 단위:** `px`, `em`, `rem`, `vh`, `vw`, `%`만 본다. `19951231s`, `300ms`, `12deg`처럼 다른 단위로 읽히는 값은 통과한다.
 - **따옴표 안의 값 (`secret-assignment`):** 문자열 리터럴로 본다. `"Admin.Master.Key"`, `'alpha.bravo.charlie'`, `"get_token()"`은 참조·코드로 거르지 않는다. 템플릿(`"{{ x }}"`, `"%(name)s"`)만 따옴표 안에서도 거른다. 따옴표 없는 값은 참조·코드·템플릿 모두 판정한다.
 - **그 밖에 통과하는 값:** `p@ss(w0rd`, `Tr0ub&dor`, `a<b>c!9`, `my&lt!pass9`처럼 위 구조와 맞지 않는 값이다.
-- **흔한 비밀번호:** `password123`, `admin123`, `letmein2026`은 `dummy_value`도 거르지 않는다.
+- **흔한 비밀번호와 약한 기본 비밀번호:** `password123`, `admin123`, `letmein2026`, 그리고 `changeme`, `change_me`, `change-me`, `changeit`, `dummy`는 `dummy_value`도 거르지 않는다. 라벨 가이드 결정 3에 따라 약한 기본 비밀번호는 가려야 하는 값이다.
 - **판정 방법:** 탐지기 묶음의 거르기는 값 앞뒤의 따옴표와 공백을 뗀 문자열로 판정한다. 길이는 어디에서도 기준이 아니다.
 
 ## 어디서 거르나
