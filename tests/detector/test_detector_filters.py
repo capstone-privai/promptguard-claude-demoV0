@@ -35,6 +35,9 @@ SHAPES = [
     ("code expression: index", "options['password']", "code_fragment"),
     ("code expression: call with references", "get_config(name, self.region)", "code_fragment"),
     ("code expression: call with a string", 'os.getenv("API_KEY")', "code_fragment"),
+    ("code expression: env name index", 'os.environ["DB_PASS"]', "code_fragment"),
+    ("code expression: dotted key name", 'config.get("db.password")', "code_fragment"),
+    ("code expression: key names", "settings.get('db-pass', 'API_KEY')", "code_fragment"),
     ("code expression: empty index", "items[]", "code_fragment"),
     ("CSS value: keyword", ":unset", "css_value"),
     ("CSS value: important", "!important", "css_value"),
@@ -76,6 +79,9 @@ REAL = ["p@ss(w0rd", "Tr0ub&dor", "a<b>c!9", "password123", "Hello(World)1", "my
         # found by review of #23: brackets that close but hold no code, and CSS look-alikes
         "Xk9(mZ!q#2)", "S3cr3t(!)", "Hunter(2)", "Summer[2024]", "Pass(12, 34)", "Key[0x1f]",
         "var(Xk9!q", "url(Xk9!q)", "calc(Xk9!)", "rgba(Xk9!)", "19951231s", "300ms", "12deg",
+        # a quoted argument that is not a key name: a secret default, a secret key, a hex value
+        'os.getenv("DB_PASS", "SYNTHx7Qk2m!pw")', "options['SYNTHx7Qk2m!pw']", 'String("9f8e7d6c5b4a39281706f5e4d3c2b1a0")',
+        "cfg['deadbeefcafe']", 'get("abc123def")', "lookup('pass word')",
         # weak default passwords are values to mask, not placeholders (labeling guide, decision 3)
         "changeme", "CHANGEME", "change_me", "change-me", "changeit", "dummy"]
 
@@ -195,6 +201,8 @@ class SecretAssignment(unittest.TestCase):
         # a template stays a template inside quotes
         'password = "{{vault_password}}"',
         "secret_key = '%(secret_key)s'",
+        # a dotenv template is still a template
+        "DB_PASSWORD={{vault_password}}",
     ]
     KEPT = [
         "password = p@ss(w0rd",
@@ -209,6 +217,13 @@ class SecretAssignment(unittest.TestCase):
         "api_key = 'settings.SECRET_KEY'",
         "password = Hunter(2)",
         "password = Xk9(mZ!q#2)",
+        # a dotenv value (upper-case key, = with no spaces) is a literal even unquoted
+        "DB_PASSWORD=alpha.bravo.charlie",
+        "export API_TOKEN=Admin.Master.Key",
+        # three dotted parts alone do not make a reference
+        "password = alpha.bravo.charlie",
+        # a secret default inside a call is a literal, not a key name
+        'token = get_value("SYNTHx7Qk2m!pw")',
     ]
 
     def found(self, text: str, env: dict[str, str]) -> int:
@@ -228,12 +243,52 @@ class SecretAssignment(unittest.TestCase):
             detector = Detector([PatternAdapter("promptguard-rules", {"min_value_length": 8}, ROOT)], ConsensusPolicy.parse("any"), candidate_policy="union")
             result = detector.scan("\n".join(self.CODE), "tool_result")
         self.assertEqual(result["finding_count"], 0)
-        self.assertEqual(result["filtered"], {"assignment_code": 5, "assignment_reference": 3, "assignment_template": 4})
+        self.assertEqual(result["filtered"], {"assignment_code": 5, "assignment_reference": 3, "assignment_template": 5})
 
     def test_real_values_are_still_found(self) -> None:
         for text in self.KEPT:
             with self.subTest(case=self.KEPT.index(text)):
                 self.assertEqual(self.found(text, ON), 1)
+
+
+class DefaultValues(unittest.TestCase):
+    """secret-assignment reports a quoted default of an env or config lookup, with the filters off and on.
+
+    This widens detection, apart from the filters: os.environ.get(..., "...") was not found at all before.
+    """
+
+    SECRET = "SYNTHx7Qk2m!pw"
+    FORMS = [
+        'password = os.getenv("DB_PASS", "{v}")',
+        "password = os.environ.get('DB_PASS', '{v}')",
+        'const password = process.env.DB_PASS || "{v}"',
+        "const token = process.env.API_TOKEN ?? '{v}'",
+        'password = config.get("db.password", "{v}")',
+        'db_password=os.getenv("DB_PASS","{v}")',
+    ]
+
+    def values(self, text: str, env: dict[str, str]) -> list[str]:
+        with mock.patch.dict(os.environ, env):
+            if "PG_DETECTOR_FILTERS" not in env:
+                os.environ.pop("PG_DETECTOR_FILTERS", None)
+            adapter = PatternAdapter("promptguard-rules", {"min_value_length": 8}, ROOT)
+            return [text[f.start:f.end] for f in adapter.scan(text) if f.rule_id == "secret-assignment"]
+
+    def test_the_default_is_a_candidate(self) -> None:
+        for form in self.FORMS:
+            text = form.format(v=self.SECRET)
+            for env in ({}, ON):
+                with self.subTest(case=self.FORMS.index(form), filters=bool(env)):
+                    self.assertIn(self.SECRET, self.values(text, env))
+
+    def test_filters_on_leave_only_the_default(self) -> None:
+        text = self.FORMS[0].format(v=self.SECRET)
+        self.assertEqual(self.values(text, ON), [self.SECRET])
+
+    def test_a_key_name_default_is_not_a_candidate(self) -> None:
+        for default in ("DEFAULT_PASS", "db.password", "none"):
+            with self.subTest(default=default):
+                self.assertNotIn(default, self.values(f'password = os.getenv("DB_PASS", "{default}")', ON))
 
 
 if __name__ == "__main__":
