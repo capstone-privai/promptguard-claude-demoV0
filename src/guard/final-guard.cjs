@@ -61,15 +61,21 @@ function sendJson(response, statusCode, value, extraHeaders = {}) {
   response.end(encoded)
 }
 
-function sendGuardError(response, requestId, error) {
+// filterMismatch: detector filter settings (names) that differ between the Native Mod's and this Guard's detector
+// workers. A finding then may be text the Mod's filters let through, so the block says why.
+function sendGuardError(response, requestId, error, filterMismatch = []) {
   const code = error instanceof GuardError ? error.code : 'INTERNAL_ERROR'
   const statusCode = error instanceof GuardError ? error.statusCode : 500
+  const mismatch = code === 'DETECTOR_FINDINGS' && filterMismatch.length > 0
   sendJson(response, statusCode, {
     type: 'error',
     error: {
       type: 'promptguard_block',
       code,
-      message: errorMessage(code),
+      message: mismatch
+        ? `${errorMessage(code)} 필터 설정 불일치: ${filterMismatch.join(', ')} (the Native Mod and Final Guard detectors run different filter settings).`
+        : errorMessage(code),
+      ...(mismatch ? { filter_settings_mismatch: [...filterMismatch] } : {}),
       request_id: requestId,
     },
   }, { 'x-promptguard-request-id': requestId })
@@ -242,7 +248,7 @@ class FinalGuard {
       scan_latency_ms: context.scanLatencyMs,
       upstream_status: null,
     })
-    sendGuardError(response, context.requestId, error)
+    sendGuardError(response, context.requestId, error, this.config.filterMismatch)
   }
 
   async readiness() {

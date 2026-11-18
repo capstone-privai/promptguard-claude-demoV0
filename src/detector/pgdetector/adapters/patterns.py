@@ -139,7 +139,9 @@ class PatternAdapter(DetectorAdapter):
             start, end = value.start(), value_end(text, *value.span())
             if not self._plausible(text[start:end]):
                 continue
-            reason = assignment_value_is_code(text[start:end]) if self.skip_code_values else None
+            # ASSIGNMENT takes the opening quote, so a quoted value has its quote right before and after it.
+            quoted = start > 0 and text[start - 1] in "\"'`" and end < len(text) and text[end] == text[start - 1]
+            reason = assignment_value_is_code(text[start:end], quoted) if self.skip_code_values else None
             if reason:
                 declined = getattr(self._batch, "declined", None)
                 if declined:

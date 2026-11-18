@@ -9,8 +9,9 @@ false positives were mostly the secret-assignment rule on references and code, a
 code fragments (&lt;, </p>, function(, attributes[, :unset) found once and re-masked at every repeat.
 
 - html_fragment  HTML entities and tags of known HTML elements, with at most letters, spaces and / between them
-- code_fragment  a call or index of an identifier: get_token(), function(, attributes[, options['x']
-- css_value      CSS keywords, lengths and functions: :unset, !important, 12px, rgba(
+- code_fragment  an open call or index of an identifier (function(, attributes[), or a closed one holding only
+                 identifiers, attribute references and string literals (get_token(), options['x'])
+- css_value      CSS keywords, px/em/rem/vh/vw/% lengths, and closed CSS functions holding CSS values (var(--x))
 - template       {{ }}, {% %}, ${ }, #{ }, <db-password>, %(name)s, {name}, and PromptGuard's own [TYPE_N]
 - dummy_value    (PG_DETECTOR_FILTER_DUMMY=on, separately) an exact list of example values (changeme, <password>) and
                  the explicit forms your_*_here, <your-*>, xxx, ***; never a common real password such as password123
@@ -43,11 +44,24 @@ _HTML_PIECE = re.compile(rf"{_ENTITY}|{_TAG}", re.I)
 _HTML_REST = re.compile(r"[A-Za-z/\s]*")
 
 _IDENT = r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*"
-_CODE = re.compile(rf"{_IDENT}(?:\((?:[^()]*\))?|\[(?:[^\[\]]*\])?)")
+_STRING = r"\"[^\"\\]*\"|'[^'\\]*'"
+# Inside a closed call or index only code may stand: nothing, identifiers and attribute references, string
+# literals, and comma lists of them. Hunter(2) and Summer[2024] hold a number, which code and a password share.
+_ARGS = rf"\s*(?:(?:{_IDENT}|{_STRING})(?:\s*,\s*(?:{_IDENT}|{_STRING}))*)?\s*"
+_CODE = re.compile(rf"{_IDENT}(?:\(|\[|\({_ARGS}\)|\[{_ARGS}\])")
+_CSS_NUMBER = r"-?(?:\d+(?:\.\d+)?|\.\d+)"
+_CSS_LENGTH = rf"{_CSS_NUMBER}(?:px|em|rem|vh|vw|%)"
+_CSS_TERM = rf"(?:{_CSS_LENGTH}|{_CSS_NUMBER}|var\(\s*--[A-Za-z0-9_-]+\s*\))"
+_CSS_CHANNEL = rf"{_CSS_NUMBER}(?:%|deg)?"
+# A CSS function counts only closed and holding a CSS value: var(Xk9!q and url(Xk9!q) pass. Lengths use only px,
+# em, rem, vh, vw and %; 19951231s or 300ms read as times and pass.
 _CSS = re.compile(
-    r"(?i)(?::{1,2}(?:unset|inherit|initial|revert|revert-layer|hover|focus|active|before|after|root|not|nth-child)\b.*"
-    r"|!important|-?\d*\.?\d+(?:px|em|rem|vh|vw|vmin|vmax|pt|pc|cm|mm|ch|ex|deg|s|ms)"
-    r"|(?:rgba?|hsla?|var|calc|url|linear-gradient)\(.*)"
+    r":{1,2}(?:unset|inherit|initial|revert|revert-layer|hover|focus|active|before|after|root|first-child|last-child)"
+    rf"|!important|{_CSS_LENGTH}"
+    r"|var\(\s*--[A-Za-z0-9_-]+\s*(?:,\s*[^()]*)?\)"
+    rf"|(?:rgba?|hsla?)\(\s*{_CSS_CHANNEL}(?:\s*[,/ ]\s*{_CSS_CHANNEL}){{2,3}}\s*\)"
+    rf"|calc\(\s*{_CSS_TERM}(?:\s*[-+*/]\s*{_CSS_TERM})*\s*\)"
+    r"|url\(\s*(?:\"[^\"]*\"|'[^']*'|[A-Za-z0-9_./:#?=&%~-]+)\s*\)"
 )
 _TEMPLATE = re.compile(
     r"\{\{.*\}\}|\{%.*%\}|\$\{.*\}|#\{.*\}|%\([A-Za-z_]\w*\)[sdr]|\{[A-Za-z_][\w.]*\}"
@@ -95,6 +109,14 @@ STRUCTURE: list[tuple[str, Callable[[str], bool]]] = [
     # css before code: rgba(0,0,0,0.5) is a CSS value, not a call to keep.
     ("html_fragment", html_fragment), ("css_value", css_value), ("template", template), ("code_fragment", code_fragment),
 ]
+
+
+SETTINGS = ("PG_DETECTOR_FILTERS", "PG_DETECTOR_FILTER_DUMMY")
+
+
+def filter_settings() -> dict[str, str]:
+    """The two settings as on or off, for describe(): the supervisor compares the Mod's and the Guard's workers."""
+    return {name: "on" if os.environ.get(name) == "on" else "off" for name in SETTINGS}
 
 
 def high_confidence_rules(path: Path = RULES_FILE) -> set[tuple[str, str]]:
@@ -155,9 +177,15 @@ def reference(value: str) -> bool:
     return parts[0] in _RECEIVERS or len(parts) >= 3 or bool(_SECRET_WORDS.search(parts[-1]))
 
 
-def assignment_value_is_code(raw: str) -> str | None:
-    """The reason secret-assignment declines a value (a filter count name), or None for a value it keeps."""
+def assignment_value_is_code(raw: str, quoted: bool = False) -> str | None:
+    """The reason secret-assignment declines a value (a filter count name), or None for a value it keeps.
+
+    A quoted value is a string literal ("Admin.Master.Key", "get_token()"), never a reference or code; only a
+    template ("{{ x }}", "%(name)s") is declined inside quotes.
+    """
     value = _value(raw)
+    if quoted:
+        return "assignment_template" if template(value) else None
     if reference(value):
         return "assignment_reference"
     if template(value):
