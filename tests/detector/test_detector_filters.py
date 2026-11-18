@@ -1,0 +1,205 @@
+"""Detector filters (PG_DETECTOR_FILTERS, PG_DETECTOR_FILTER_DUMMY): values that cannot be secrets by structure.
+
+One synthetic example per false-positive shape of promptguard-data's stage-0 fp_types.csv, the real-password
+counter-examples that must pass, the high-confidence rules that are never filtered, and the secret-assignment
+rule's own value checks. Messages print shapes and filter names, never values.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import unittest
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src" / "detector"))
+
+from pgdetector import ConsensusPolicy, Detector, DetectorAdapter, RawFinding  # noqa: E402
+from pgdetector.adapters.patterns import PatternAdapter  # noqa: E402
+
+# (fp_types.csv shape, synthetic value, filter that removes it with PG_DETECTOR_FILTERS=on, or None)
+SHAPES = [
+    ("short mixed value: HTML entities", "&lt;/p&gt;", "html_fragment"),
+    ("short mixed value: HTML end tag", "</p>", "html_fragment"),
+    ("short mixed value: HTML tags", "<pre><code>", "html_fragment"),
+    ("short mixed value: entity", "&gt;", "html_fragment"),
+    ("short mixed value: entity without semicolon", "&lt", "html_fragment"),
+    ("short mixed value: numeric entity", "&#39;", "html_fragment"),
+    ("code expression: call", "get_token()", "code_fragment"),
+    ("code expression: open call", "function(", "code_fragment"),
+    ("code expression: open index", "attributes[", "code_fragment"),
+    ("code expression: method call", "os.getenv(", "code_fragment"),
+    ("code expression: index", "options['password']", "code_fragment"),
+    ("CSS value: keyword", ":unset", "css_value"),
+    ("CSS value: important", "!important", "css_value"),
+    ("CSS value: length", "12px", "css_value"),
+    ("CSS value: function", "rgba(0,0,0,0.5)", "css_value"),
+    ("template: jinja", "{{ secrets.DEPLOY_KEY }}", "template"),
+    ("template: jinja block", "{% raw %}", "template"),
+    ("template: shell", "${DB_PASSWORD}", "template"),
+    ("template: ruby", "#{api_token}", "template"),
+    ("template: angle placeholder", "<db-password>", "template"),
+    ("template: python format", "%(password)s", "template"),
+    ("template: brace format", "{password}", "template"),
+    ("template: PromptGuard placeholder", "[PASSWORD_1]", "template"),
+    ("template: PromptGuard part marker", "[PASSWORD_1_PART]", "template"),
+    # kept: shapes with no structural reason
+    ("random-looking string (16+ chars)", "SYNTHx7Qk2mR9vL4wPz", None),
+    ("short mixed value", "aB3$kL9q", None),
+    ("word or identifier", "buildCacheDirectory", None),
+    ("variable or attribute reference (other rules)", "self.password", None),
+    ("digits only", "1700000000", None),
+    ("hex digest", "9f86d081884c7d65a2f0", None),
+    ("UUID", "123e4567-e89b-12d3-a456-426614174000", None),
+    ("URL or path", "https://example.test/path", None),
+    ("email address", "dev@example.test", None),
+    ("JWT-like", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aCJ9.c3ludGhfc2ln", None),
+    ("password hash", "$6$SYNTHsalt$SYNTHhashvalue", None),
+]
+# Explicit example and dummy values: only with PG_DETECTOR_FILTER_DUMMY=on.
+DUMMIES = ["changeme", "CHANGE_ME", "your_api_key_here", "your-password-here", "<password>", "<YOUR_TOKEN>", "<your-api-key>",
+           "xxxxxxxx", "********", "REDACTED", "[redacted]", "placeholder", "dummy", "replace_me", "insert_token_here"]
+# Real passwords with look-alike characters: never filtered.
+REAL = ["p@ss(w0rd", "Tr0ub&dor", "a<b>c!9", "password123", "Hello(World)1", "my&lt!pass9", "Secret[2024]x", "{SYNTH}9!q",
+        "Summer2024.Pass", "x9#{q}Z", "Pa55word!", "letmein2026", "admin123", "qwerty!7"]
+
+
+class Stub(DetectorAdapter):
+    version = "test"
+
+    def __init__(self, name: str, value: str, rule: str = "Password") -> None:
+        super().__init__(name, {}, ROOT)
+        self.value, self.rule = value, rule
+
+    def scan(self, text: str) -> list[RawFinding]:
+        start = text.find(self.value)
+        return [] if start < 0 else [RawFinding(start, start + len(self.value), "PASSWORD", self.rule, "moderate")]
+
+
+def scan(value: str, env: dict[str, str], adapter: str = "credsweeper", rule: str = "Password") -> dict:
+    with mock.patch.dict(os.environ, env, clear=False):
+        for name in ("PG_DETECTOR_FILTERS", "PG_DETECTOR_FILTER_DUMMY"):
+            if name not in env:
+                os.environ.pop(name, None)
+        detector = Detector([Stub(adapter, value, rule)], ConsensusPolicy.parse("any"), candidate_policy="union")
+        return detector.scan(f"password = {value}\n", "tool_result")
+
+
+ON = {"PG_DETECTOR_FILTERS": "on"}
+DUMMY = {"PG_DETECTOR_FILTER_DUMMY": "on"}
+
+
+class Filters(unittest.TestCase):
+    def test_each_shape(self) -> None:
+        for shape, value, expected in SHAPES:
+            with self.subTest(shape=shape):
+                result = scan(value, ON)
+                self.assertEqual(result["finding_count"], 0 if expected else 1)
+                self.assertEqual(result.get("filtered", {}), {expected: 1} if expected else {})
+
+    def test_off_changes_nothing(self) -> None:
+        for shape, value, _ in SHAPES:
+            with self.subTest(shape=shape):
+                for env in ({}, {"PG_DETECTOR_FILTERS": "off"}):
+                    result = scan(value, env)
+                    self.assertEqual(result["finding_count"], 1)
+                    self.assertNotIn("filtered", result)
+
+    def test_dummy_values_only_with_their_own_switch(self) -> None:
+        for value in DUMMIES:
+            with self.subTest(length=len(value)):
+                self.assertEqual(scan(value, ON)["finding_count"], 1, "dummy off")
+                result = scan(value, {**ON, **DUMMY})
+                self.assertEqual(result["finding_count"], 0)
+                self.assertEqual(result["filtered"], {"dummy_value": 1})
+                self.assertEqual(scan(value, DUMMY)["filtered"], {"dummy_value": 1}, "independent of PG_DETECTOR_FILTERS")
+
+    def test_dummy_switch_does_not_turn_on_the_other_filters(self) -> None:
+        self.assertEqual(scan("</p>", DUMMY)["finding_count"], 1)
+
+    def test_real_passwords_with_look_alike_characters_pass(self) -> None:
+        for value in REAL:
+            with self.subTest(length=len(value)):
+                result = scan(value, {**ON, **DUMMY})
+                self.assertEqual(result["finding_count"], 1)
+                self.assertEqual(result.get("filtered", {}), {})
+
+    def test_high_confidence_rules_are_never_filtered(self) -> None:
+        for adapter, rule in (("gitleaks", "private-key"), ("credsweeper", "Bearer Authorization"), ("promptguard-rules", "pem-private-key")):
+            with self.subTest(rule=rule):
+                self.assertEqual(scan("<pre><code>", {**ON, **DUMMY}, adapter, rule)["finding_count"], 1)
+                self.assertEqual(scan("changeme", {**ON, **DUMMY}, adapter, rule)["finding_count"], 1)
+        self.assertEqual(scan("<pre><code>", ON, "credsweeper", "private-key")["finding_count"], 0, "rule of another adapter")
+
+    def test_counts_by_name_and_no_values_in_the_result(self) -> None:
+        values = ["</p>", "&gt;", "get_token()"]
+        with mock.patch.dict(os.environ, ON):
+            detector = Detector([Stub("credsweeper", value) for value in values[:1]] + [Stub("gitleaks", values[1], "generic-api-key"), Stub("promptguard-rules", values[2], "secret-assignment")],
+                                ConsensusPolicy.parse("any"), candidate_policy="union")
+            result = detector.scan(" ".join(values), "tool_result")
+        self.assertEqual(result["filtered"], {"html_fragment": 2, "code_fragment": 1})
+        dumped = json.dumps(result)
+        for value in values:
+            self.assertNotIn(value, dumped)
+
+    def test_filtered_ballots_are_what_collect_returns(self) -> None:
+        with mock.patch.dict(os.environ, ON):
+            detector = Detector([Stub("credsweeper", "</p>")], ConsensusPolicy.parse("any"), candidate_policy="union")
+            ballots, errors = detector.collect(["password = </p>"])
+        self.assertEqual(ballots[0]["credsweeper"], [])
+        self.assertEqual(errors, [])
+
+
+class SecretAssignment(unittest.TestCase):
+    """promptguard-rules secret-assignment: a value that is a reference, a call, code or a template is not a secret."""
+
+    CODE = [
+        "password = self.password",
+        "db_password: config.db.password",
+        "secret = settings.SECRET_KEY",
+        "token = get_token()",
+        "token = new_token_value()",
+        "api_key = os.getenv(",
+        "password = Credentials.load(",
+        "api_token = request.headers[",
+        "password={{vault_password}}",
+        "secret_key = %(secret_key)s",
+    ]
+    KEPT = [
+        "password = p@ss(w0rd",
+        "password = Tr0ub&dor",
+        "password = Summer2024.Pass",
+        "password = MyS3cret!(x)",
+        "secret = SYNTHx7Qk2mR9vL4wPz",
+    ]
+
+    def found(self, text: str, env: dict[str, str]) -> int:
+        with mock.patch.dict(os.environ, env):
+            if "PG_DETECTOR_FILTERS" not in env:
+                os.environ.pop("PG_DETECTOR_FILTERS", None)
+            return len([f for f in PatternAdapter("promptguard-rules", {"min_value_length": 8}, ROOT).scan(text) if f.rule_id == "secret-assignment"])
+
+    def test_code_values_are_skipped_when_on(self) -> None:
+        for text in self.CODE:
+            with self.subTest(case=self.CODE.index(text)):
+                self.assertEqual(self.found(text, {}), 1, "off: found as today")
+                self.assertEqual(self.found(text, ON), 0)
+
+    def test_declined_values_are_counted_by_reason(self) -> None:
+        with mock.patch.dict(os.environ, ON):
+            detector = Detector([PatternAdapter("promptguard-rules", {"min_value_length": 8}, ROOT)], ConsensusPolicy.parse("any"), candidate_policy="union")
+            result = detector.scan("\n".join(self.CODE), "tool_result")
+        self.assertEqual(result["finding_count"], 0)
+        self.assertEqual(result["filtered"], {"assignment_code": 5, "assignment_reference": 3, "assignment_template": 2})
+
+    def test_real_values_are_still_found(self) -> None:
+        for text in self.KEPT:
+            with self.subTest(case=self.KEPT.index(text)):
+                self.assertEqual(self.found(text, ON), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

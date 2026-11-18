@@ -6,13 +6,17 @@ rule only fires where no specific rule already claimed the value.
 
 from __future__ import annotations
 
+import os
 import re
+import threading
 from bisect import bisect_left
+from collections import Counter
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from ..adapter import DetectorAdapter, RawFinding
 from ..core import BENIGN_VARIABLES, pem_body_lines
+from ..filters import assignment_value_is_code
 
 
 # (rule_id, type, lower-case literals one of which every match contains, pattern
@@ -96,6 +100,21 @@ class PatternAdapter(DetectorAdapter):
     def __init__(self, name: str, options: Mapping[str, Any], config_dir: Path) -> None:
         super().__init__(name, options, config_dir)
         self.min_value_length = int(options.get("min_value_length", 8))
+        # PG_DETECTOR_FILTERS=on: secret-assignment skips a value that is a reference, a call, code or a template,
+        # and counts it by reason for the ensemble (declined), per text of this thread's batch.
+        self.skip_code_values = os.environ.get("PG_DETECTOR_FILTERS") == "on"
+        self._batch = threading.local()
+
+    def scan_many(self, texts: Sequence[str]) -> list[list[RawFinding]]:
+        self._batch.declined = []
+        out = []
+        for text in texts:
+            self._batch.declined.append(Counter())
+            out.append(self.scan(text))
+        return out
+
+    def declined(self) -> list[Mapping[str, int]] | None:
+        return [dict(counts) for counts in getattr(self._batch, "declined", [])] or None
 
     def scan(self, text: str) -> list[RawFinding]:
         findings: list[RawFinding] = []
@@ -119,6 +138,12 @@ class PatternAdapter(DetectorAdapter):
                 continue
             start, end = value.start(), value_end(text, *value.span())
             if not self._plausible(text[start:end]):
+                continue
+            reason = assignment_value_is_code(text[start:end]) if self.skip_code_values else None
+            if reason:
+                declined = getattr(self._batch, "declined", None)
+                if declined:
+                    declined[-1][reason] += 1
                 continue
             if claimed.overlaps(start, end):
                 continue
