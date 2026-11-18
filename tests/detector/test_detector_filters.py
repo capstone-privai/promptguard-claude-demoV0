@@ -82,6 +82,8 @@ REAL = ["p@ss(w0rd", "Tr0ub&dor", "a<b>c!9", "password123", "Hello(World)1", "my
         # a quoted argument that is not a key name: a secret default, a secret key, a hex value
         'os.getenv("DB_PASS", "SYNTHx7Qk2m!pw")', "options['SYNTHx7Qk2m!pw']", 'String("9f8e7d6c5b4a39281706f5e4d3c2b1a0")',
         "cfg['deadbeefcafe']", 'get("abc123def")', "lookup('pass word')",
+        # a lookup's default is a value, whatever its shape
+        'os.getenv("DB_PASS", "changeme")', 'os.environ.get("ADMIN_PW", "admin")', 'config.get("db.password", "postgres")',
         # weak default passwords are values to mask, not placeholders (labeling guide, decision 3)
         "changeme", "CHANGEME", "change_me", "change-me", "changeit", "dummy"]
 
@@ -267,10 +269,21 @@ class DefaultValues(unittest.TestCase):
         'db_password=os.getenv("DB_PASS","{v}")',
     ]
 
+    # A default is a value, whatever its shape: weak and short defaults are candidates too.
+    WEAK = [
+        ('password = os.getenv("DB_PASS", "changeme")', "changeme"),
+        ('db_password = os.getenv("DB_PASSWORD", "postgres")', "postgres"),
+        ('admin_password = os.environ.get("ADMIN_PW", "admin")', "admin"),
+        ('const password = process.env.PW || "default"', "default"),
+        ('password = config.get("db.password", "x9")', "x9"),
+        ('password = os.getenv("DB_PASS", "DEFAULT_PASS")', "DEFAULT_PASS"),
+    ]
+
     def values(self, text: str, env: dict[str, str]) -> list[str]:
         with mock.patch.dict(os.environ, env):
-            if "PG_DETECTOR_FILTERS" not in env:
-                os.environ.pop("PG_DETECTOR_FILTERS", None)
+            for name in ("PG_DETECTOR_FILTERS", "PG_DETECTOR_FILTER_DUMMY"):
+                if name not in env:
+                    os.environ.pop(name, None)
             adapter = PatternAdapter("promptguard-rules", {"min_value_length": 8}, ROOT)
             return [text[f.start:f.end] for f in adapter.scan(text) if f.rule_id == "secret-assignment"]
 
@@ -281,14 +294,34 @@ class DefaultValues(unittest.TestCase):
                 with self.subTest(case=self.FORMS.index(form), filters=bool(env)):
                     self.assertIn(self.SECRET, self.values(text, env))
 
-    def test_filters_on_leave_only_the_default(self) -> None:
+    def test_only_the_default_with_filters_on_or_off(self) -> None:
         text = self.FORMS[0].format(v=self.SECRET)
-        self.assertEqual(self.values(text, ON), [self.SECRET])
+        for env in ({}, ON):
+            with self.subTest(filters=bool(env)):
+                self.assertEqual(self.values(text, env), [self.SECRET], "no separate os.getenv( span")
 
-    def test_a_key_name_default_is_not_a_candidate(self) -> None:
-        for default in ("DEFAULT_PASS", "db.password", "none"):
-            with self.subTest(default=default):
-                self.assertNotIn(default, self.values(f'password = os.getenv("DB_PASS", "{default}")', ON))
+    def test_a_weak_or_short_default_is_a_candidate(self) -> None:
+        for text, default in self.WEAK:
+            for env in ({}, ON, {**ON, **DUMMY}):
+                with self.subTest(case=self.WEAK.index((text, default)), env=sorted(env)):
+                    self.assertEqual(self.values(text, env), [default])
+
+    def test_exceptions_are_not_candidates(self) -> None:
+        for default in ("", "None", "null", "undefined", "${DB_PASS}"):
+            for env in ({}, ON):
+                with self.subTest(default=default, filters=bool(env)):
+                    self.assertNotIn(default, self.values(f'password = os.getenv("DB_PASS", "{default}")', env))
+
+    def test_a_placeholder_default_only_with_the_dummy_filter_on(self) -> None:
+        for default in ("<password>", "your_api_key_here", "xxxxxxxx"):
+            with self.subTest(length=len(default)):
+                text = f'password = os.getenv("DB_PASS", "{default}")'
+                self.assertIn(default, self.values(text, ON))
+                self.assertNotIn(default, self.values(text, {**ON, **DUMMY}))
+
+    def test_the_key_argument_must_be_a_key_name(self) -> None:
+        # Not a lookup when its first argument is not a key: no default candidate from it.
+        self.assertNotIn("abcdefgh9", self.values('password = os.getenv("Xk9!q#2", "abcdefgh9")', ON))
 
 
 if __name__ == "__main__":

@@ -41,7 +41,15 @@
 
 ## 거르기와 별개인 탐지 범위 확대: 조회 호출의 기본값
 
-`secret-assignment`는 비밀 이름의 키에 아래 조회 호출이 오면, 키 이름 모양이 아닌 따옴표 기본값을 비밀 후보로 낸다. 거르기를 켜든 끄든 같다.
+`secret-assignment`는 비밀 이름의 키에 아래 조회 호출이 오면, 따옴표 기본값을 비밀 후보로 낸다. 거르기를 켜든 끄든 같다.
+
+- **첫 번째 인자(키):** 식별자이거나 따옴표 안이 키 이름이어야 한다. 키 이름이 아니면(`os.getenv("Xk9!q#2", …)`) 조회 호출로 보지 않는다.
+- **두 번째 인자(기본값):** 키가 아니라 값이다. 그래서 모양과 상관없이 후보로 낸다. `changeme`, `postgres`, `admin`, `default`, `DEFAULT_PASS`도 낸다.
+- **후보에서 빼는 기본값:** 빈 문자열, `None`·`null`·`undefined`, 템플릿(`${X}`)이다. `PG_DETECTOR_FILTER_DUMMY=on`이면 `dummy_value` 목록의 자리표시 값(`<password>`, `your_*_here`, `xxx…`)도 뺀다.
+- **호출 앞부분:** 기본값을 후보로 낼 때는 `os.getenv(` 같은 호출 앞부분을 따로 내지 않는다. 거르기를 켜면 `assignment_code`로 센다.
+- **탐지기 묶음 거르기:** `code_fragment`도 기본값이 값인 조회 호출(`os.getenv("DB_PASS", "changeme")`)을 코드로 보지 않는다.
+
+대상 조회 호출은 다음과 같다.
 
 - `os.getenv(..., "…")`
 - `os.environ.get(..., "…")`
@@ -50,15 +58,14 @@
 
 이전에는 다음과 같았다.
 - **거르기를 켠 경우:** 호출(`os.getenv(`)을 통째로 코드로 거르면서, 기본값의 비밀도 같이 버렸다.
-- **거르기를 끈 경우:** `os.environ.get`과 `process.env`는 자리표시 규칙(`PLACEHOLDER`)에 걸려 아예 보지 않았다.
+- **거르기를 끈 경우:** `os.environ.get`과 `process.env`는 자리표시 규칙(`PLACEHOLDER`)에 걸려 아예 보지 않았다. `os.getenv`·`config.get`은 호출 앞부분(`os.getenv(`)을 비밀로 냈다.
 
-이제는 다음과 같다.
-- **거르기를 켠 경우:** 기본값을 따로 내고, 호출 자체(`os.getenv(`)는 `assignment_code`로 셈한다.
-- **거르기를 끈 경우:** 호출은 지금처럼 내고, 기본값을 더 낸다.
+이제는 켜든 끄든 기본값 하나만 후보로 낸다.
 
-키 이름 모양인 기본값(`"DEFAULT_PASS"`, `"db.password"`)은 내지 않는다.
-
-**측정 주의:** 이 변경으로 off 기준선도 바뀐다. off에서도 `os.environ.get`·`process.env`의 기본값과 `os.getenv`·`config.get`의 기본값을 잡는다. 따라서 off와 on의 차이에는 이 탐지 확대가 들어 있지 않다. 이전 측정값(예: CredData-trajectory 668c2c1)과 비교할 때는 off도 다시 돌려야 한다.
+**측정 주의:** 이 변경으로 off 기준선도 바뀐다.
+- off에서도 조회 호출의 기본값을 잡는다. `os.environ.get`·`process.env`는 새로 잡고, `os.getenv`·`config.get`도 호출 앞부분 대신 기본값을 낸다.
+- 따라서 off와 on의 차이에는 이 탐지 확대가 들어 있지 않다.
+- 이전 측정값(예: CredData-trajectory 668c2c1)과 비교할 때는 off도 다시 돌려야 한다.
 
 ## 어디서 거르나
 
