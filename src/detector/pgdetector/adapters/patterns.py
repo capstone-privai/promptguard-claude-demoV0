@@ -16,7 +16,7 @@ from typing import Any, Mapping, Sequence
 
 from ..adapter import DetectorAdapter, RawFinding
 from ..core import BENIGN_VARIABLES, pem_body_lines
-from ..filters import assignment_value_is_code
+from ..filters import CLOSED_CALL, assignment_value_is_code, key_name
 
 
 # (rule_id, type, lower-case literals one of which every match contains, pattern
@@ -47,6 +47,23 @@ PLACEHOLDER = re.compile(
     r"|(?:process\.env|os\.environ|import\.meta\.env)\b.*"
     r"|(?i:true|false|null|none|undefined|redacted)"
 )
+# An env or config lookup with a quoted default, from the assignment's value on.
+DEFAULT_CALL = re.compile(
+    r"(?:os\.getenv|os\.environ\.get|config\.get)\(\s*(?:\"[^\"\n]*\"|'[^'\n]*'|[A-Za-z_][\w.]*)\s*,\s*"
+    r"(?P<quote>[\"'])(?P<default>[^\"'\n]*)(?P=quote)"
+)
+DEFAULT_OR = re.compile(r"process\.env\.[A-Za-z_]\w*\s*(?:\|\||\?\?)\s*(?P<quote>[\"'`])(?P<default>[^\"'`\n]*)(?P=quote)")
+DOTENV_KEY = re.compile(r"[A-Z][A-Z0-9_]*")
+
+
+def dotenv_assignment(text: str, found: re.Match[str]) -> bool:
+    """KEY=value at the start of a line (or after export), upper-case key, no space around =: a dotenv literal."""
+    if not DOTENV_KEY.fullmatch(found.group("key")) or text[found.end("key"):found.end()] != "=":
+        return False
+    line_start = text.rfind("\n", 0, found.start("key")) + 1
+    return text[line_start:found.start("key")].strip() in ("", "export")
+
+
 CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 KEY_PARTS = re.compile(r"[_.\-]+")
 # ``token_url``, ``password_file`` ... name where a secret lives, not the secret.
@@ -137,11 +154,31 @@ class PatternAdapter(DetectorAdapter):
             if value is None:
                 continue
             start, end = value.start(), value_end(text, *value.span())
+            # The quoted default of an env or config lookup (os.getenv("DB_PASS", "<secret>"), process.env.X || "...")
+            # is a candidate of its own, with the filters on or off. os.environ.get and process.env were never read
+            # before (PLACEHOLDER), so this widens detection apart from the filters.
+            default = DEFAULT_CALL.match(text, start) or DEFAULT_OR.match(text, start)
+            has_default = False
+            if default:
+                d_start, d_end = default.span("default")
+                literal = text[d_start:d_end]
+                if self._plausible(literal) and not key_name(literal) and not claimed.overlaps(d_start, d_end):
+                    findings.append(RawFinding(d_start, d_end, finding_type, "secret-assignment", "moderate"))
+                    has_default = True
             if not self._plausible(text[start:end]):
                 continue
             # ASSIGNMENT takes the opening quote, so a quoted value has its quote right before and after it.
+            # A dotenv line (DB_PASSWORD=alpha.bravo.charlie) is a literal too, quoted or not.
             quoted = start > 0 and text[start - 1] in "\"'`" and end < len(text) and text[end] == text[start - 1]
-            reason = assignment_value_is_code(text[start:end], quoted) if self.skip_code_values else None
+            quoted = quoted or dotenv_assignment(text, found)
+            # VALUE stops at a quote, so a call is judged with its arguments when it closes on the line: a quoted
+            # argument that is not a key name keeps it.
+            call = CLOSED_CALL.match(text, start)
+            judged = call.group() if call and call.end() > end else text[start:end]
+            if self.skip_code_values and has_default and not quoted:
+                reason: str | None = "assignment_code"  # the lookup's secret is the default candidate above
+            else:
+                reason = assignment_value_is_code(judged, quoted) if self.skip_code_values else None
             if reason:
                 declined = getattr(self._batch, "declined", None)
                 if declined:

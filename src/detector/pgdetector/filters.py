@@ -45,11 +45,18 @@ _HTML_PIECE = re.compile(rf"{_ENTITY}|{_TAG}", re.I)
 _HTML_REST = re.compile(r"[A-Za-z/\s]*")
 
 _IDENT = r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*"
-_STRING = r"\"[^\"\\]*\"|'[^'\\]*'"
-# Inside a closed call or index only code may stand: nothing, identifiers and attribute references, string
-# literals, and comma lists of them. Hunter(2) and Summer[2024] hold a number, which code and a password share.
+# A key name: an environment variable name, or lower-case words without digits joined by . _ -. A hex string of 8
+# or more characters is a value even when it is all letters (deadbeefcafe).
+_KEY_NAME = r"(?:[A-Z_][A-Z0-9_]*|[a-z]+(?:[._-][a-z]+)*)"
+_NOT_HEX = r"(?![0-9a-fA-F]{8,}[\"'])"
+_STRING = rf"\"{_NOT_HEX}{_KEY_NAME}\"|'{_NOT_HEX}{_KEY_NAME}'"
+# Inside a closed call or index only code may stand: nothing, identifiers and attribute references, quoted key names,
+# and comma lists of them. Hunter(2) and Summer[2024] hold a number, which code and a password share, and a quoted
+# argument that is not a key name (os.getenv("DB_PASS", "<secret>"), options['<secret>']) may be the secret itself.
 _ARGS = rf"\s*(?:(?:{_IDENT}|{_STRING})(?:\s*,\s*(?:{_IDENT}|{_STRING}))*)?\s*"
 _CODE = re.compile(rf"{_IDENT}(?:\(|\[|\({_ARGS}\)|\[{_ARGS}\])")
+# A call or index that closes on its line, with any arguments: secret-assignment judges it whole.
+CLOSED_CALL = re.compile(rf"{_IDENT}(?:\([^()\n]*\)|\[[^\[\]\n]*\])")
 _CSS_NUMBER = r"-?(?:\d+(?:\.\d+)?|\.\d+)"
 _CSS_LENGTH = rf"{_CSS_NUMBER}(?:px|em|rem|vh|vw|%)"
 _CSS_TERM = rf"(?:{_CSS_LENGTH}|{_CSS_NUMBER}|var\(\s*--[A-Za-z0-9_-]+\s*\))"
@@ -173,11 +180,21 @@ _DOTTED = re.compile(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+")
 
 
 def reference(value: str) -> bool:
-    """self.password, config.db.password, settings.SECRET_KEY: an attribute chain, not a literal."""
+    """self.password, config.db.password, settings.SECRET_KEY: an attribute chain, not a literal.
+
+    Only a known receiver first or a secret word last makes one; three dotted parts alone (alpha.bravo.charlie)
+    may be a passphrase.
+    """
     if not _DOTTED.fullmatch(value):
         return False
     parts = value.split(".")
-    return parts[0] in _RECEIVERS or len(parts) >= 3 or bool(_SECRET_WORDS.search(parts[-1]))
+    return parts[0] in _RECEIVERS or bool(_SECRET_WORDS.search(parts[-1]))
+
+
+
+def key_name(value: str) -> bool:
+    """An environment variable name or dotted lower-case words, not a value: DB_PASS, db.password."""
+    return bool(re.fullmatch(_KEY_NAME, value)) and not re.fullmatch(r"[0-9a-fA-F]{8,}", value)
 
 
 def assignment_value_is_code(raw: str, quoted: bool = False) -> str | None:
