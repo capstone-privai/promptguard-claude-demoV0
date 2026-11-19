@@ -66,9 +66,11 @@ STDIN_PASSTHROUGH = {"cat", "echo", "printf"}
 
 EXPECT_CUE = re.compile(r"(?i)pass|assword|token|secret|\bpin\b")
 EXPECT_CALL = re.compile(r"(?i)(?:\bexpect\b|\.expect(?:_exact)?\s*\()")
-SEND_CALL = re.compile(r"(?i)\b(?:send|sendline)\s*(?:\(\s*)?[bBrRuUfF]?(?P<quote>['\"])(?P<value>.*?)(?P=quote)")
+# A quoted literal runs to its real closing quote: \" \' and \\ inside do not end it.
+QUOTED_VALUE = r"(?P<quote>['\"])(?P<value>(?:\\.|(?!(?P=quote))[^\\])*)(?P=quote)"
+SEND_CALL = re.compile(rf"(?i)\b(?:send|sendline)\s*(?:\(\s*)?[bBrRuUfF]?{QUOTED_VALUE}")
 FUNCTION_CALL = re.compile(r"(?s)\b(?P<name>[A-Za-z_][A-Za-z0-9_.]*)\s*\((?P<args>[^\r\n()]*)\)")
-STRING_LITERAL = re.compile(r"[bBrRuUfF]?(?P<quote>['\"])(?P<value>.*?)(?P=quote)")
+STRING_LITERAL = re.compile(rf"[bBrRuUfF]?{QUOTED_VALUE}")
 KEYWORD_ARG = re.compile(r"^\s*(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*[=:]\s*")
 STRONG_FUNCTION_WORDS = {"password", "passwd", "passphrase", "credential", "credentials", "secret", "token"}
 AMBIGUOUS_FUNCTION_WORDS = {"login", "authenticate", "auth"}
@@ -292,10 +294,15 @@ def split_identifier(name: str) -> set[str]:
 
 def split_args(args: str) -> list[str]:
     parts, current, quote = [], [], ""
+    escaped = False
     for char in args:
         if quote:
             current.append(char)
-            if char == quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
                 quote = ""
         elif char in "'\"":
             quote = char
