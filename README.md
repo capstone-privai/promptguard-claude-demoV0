@@ -81,6 +81,8 @@ Claude 인수를 넘길 때는 `--` 뒤에 적습니다. 예: `../promptguard ru
 
 Final Guard는 실제 Anthropic upstream으로 전달되는 `/v1/messages`와 `/v1/messages/count_tokens` JSON의 모든 문자열 leaf를 다시 검사합니다. finding뿐 아니라 detector timeout, crash, malformed response, body 제한 위반과 알 수 없는 endpoint도 provider 전송 전에 차단합니다. 요청 원문, credential, authorization header는 audit에 남기지 않습니다.
 
+`PG_GUARD_COUNT_TOKENS=mask`이면 count_tokens 요청에 한해 422 대신 탐지한 값을 자리표시자로 바꿔 보냅니다(기본 `block`). count_tokens의 응답은 토큰 수뿐이라 내용이 돌아오지 않습니다. 시스템 프롬프트에서 비밀이 나와 막을 때는 `promptguard run`으로 실행하라는 안내를 오류 메시지에 붙입니다. 자세한 내용은 [자리표시자 안내와 빈틈](docs/PLACEHOLDER_GUIDE_AND_GAPS.md)에 있습니다.
+
 이미 깨끗하다고 판정된 문자열은 다시 검사하지 않으므로, 매 turn 반복되는 system prompt와 tool 정의는 세션의 첫 요청에서만 검사됩니다. 그래서 첫 요청은 오래 걸릴 수 있고(claude.ai 커넥터가 많으면 10~20초), 이후 요청은 새로 추가된 대화만 검사합니다.
 
 > 두 worker는 process와 lifecycle이 독립적이지만 같은 최신 detector ensemble 설정을 사용합니다. 따라서 Mod 장애, 변환 뒤 재노출, worker 하나의 장애를 최종 전송 지점에서 막는 의미가 있습니다. 반면 모든 adapter가 공통으로 놓치는 패턴은 Guard도 놓칠 수 있으므로, detector 다양성과 coverage 검증은 별도 과제입니다.
