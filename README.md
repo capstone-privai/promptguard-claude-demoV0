@@ -147,6 +147,8 @@ Claude Code에서 `!`로 직접 실행한 명령과 그 출력은 `prompt.submit
 
 `PG_DETECTOR_FILTERS=on`이면 탐지기가 구조상 비밀일 수 없는 값(HTML 조각, 코드 호출, CSS 값, 템플릿, `secret-assignment`의 참조·코드 값)을 합집합 전에 거릅니다. `PG_DETECTOR_FILTER_DUMMY=on`은 예시·더미 값을 따로 거릅니다. 둘 다 기본은 꺼짐이고, 기준은 [탐지기 거르기](docs/DETECTOR_FILTERS.md)에 있습니다.
 
+`PG_REMASK_SHORT=boundary`이면 8자 미만 값은 단어 경계가 맞는 곳에서만 다시 가리고, `PG_SHELL_POSITIONAL_MIN=4`이면 shell-aware가 함수 이름 단서로 잡는 4자 미만 위치 인자를 내지 않습니다. 기본값은 지금 동작(`substring`, `1`)이고, 기준은 [짧은 값 재마스킹](docs/REMASK_FLOOR.md)에 있습니다.
+
 ### 원복한 값이 모델로 다시 실려 가는가? (E2E 검증)
 
 실제 Claude Code CLI + Native Mod + detector worker를 가짜 Anthropic API에 연결해, provider로 나가는 요청을 전부 기록하고 확인했습니다 (Claude Code 2.1.296에서 확인).
