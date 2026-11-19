@@ -95,49 +95,6 @@ Native Mod의 탐지기(Transform)와 Final Guard의 탐지기(Verification)에�
 
 ## 측정 (정우)
 
-### (a) 기존 9개 데이터셋 (`eval/stage0-fp-analysis` 브랜치)
+`eval/integration-1118`부터는 `scripts/eval_integration/run.py`가 #23·#24·#26의 설정을 한 번에 돌려 한 표로 낸다. 실행 방법과 표의 열은 README의 "통합 측정"에 있다. 이 PR의 `scripts/detector_filters/run_eval.py`·`compare.py`는 그 실행기로 옮겨 합쳤다(`filters.jsonl` 기록은 `scripts/eval_integration/instrument.py`에 그대로 있다).
 
-promptguard-data 루트에서 이 브랜치의 PromptGuard(`$PG`)로 ML을 끄고(기본) 돌린다. `run_eval.py`는 채점기를 고치지 않는다. 실행 중에만 설정을 켜고, 결과 폴더에 `filters.jsonl`(item별 이름별 개수와 걸러낸 finding의 탐지기·규칙·위치, 값 없음)을 남긴다.
-
-```bash
-PG=../promptguard-claude-demoV0
-for cfg in off on; do
-  for d in sessions sessions_2 sessions_from_example sessions_from_CredData sessions_from_noseyparker \
-           sessions_from_Nemotron-PII sessions_from_trajectory sessions_from_openhands-feedback sessions_from_SWE-Gym; do
-    python $PG/scripts/detector_filters/run_eval.py --data-root . --filters $cfg -- \
-      run --system promptguard --system-root $PG \
-      --sessions metric-detection/data_test/$d.jsonl --out metric-detection/results/filters_$cfg
-  done
-done
-python $PG/scripts/detector_filters/compare.py --data-root . \
-  --run off=metric-detection/results/filters_off --run on=metric-detection/results/filters_on --out filters_compare_a.md
-```
-
-`compare.py`는 데이터셋별로 다음을 표로 낸다.
-- precision, recall(정확히/덮었는가)
-- 탐지기 오탐(병합된 finding span과 같은 edit)과 재마스킹 오탐(그 밖의 edit)
-- 덮었는가 기준 recall 변화(%p)와 거르기 규칙별 걸러낸 수
-- on에서 새로 놓친 비밀: 정답 유형, 그 위를 걸러낸 거르기 이름, 탐지기:규칙별
-
-규칙별 수치(`rules.csv`)도 기존 방식대로 비교할 수 있다: `python -m evaluation.report.fp_analysis --config off results/filters_off --config on results/filters_on --out results/filters_fp` (`metric-detection/`에서).
-
-### (b) creddata-v1 test 분할 (`creddata-trajectory-data` 브랜치)
-
-그 브랜치의 채점은 덮은 recall, 글자 단위 precision, F2를 쓴다. `sessions_from_CredData-trajectory.jsonl`(test 분할)로 off, on, on+dummy와 프로토타입(CredSweeper만, ML 끔)을 돌린다.
-
-```bash
-PG=../promptguard-claude-demoV0
-S=metric-detection/data_test/sessions_from_CredData-trajectory.jsonl
-for cfg in off on on+dummy; do
-  python $PG/scripts/detector_filters/run_eval.py --data-root . --filters $cfg -- \
-    run --system promptguard --system-root $PG --sessions $S --out runs/filters/$cfg
-done
-python metric-detection/scripts/evaluate.py run --system credsweeper --ml off --sessions $S --out runs/filters/prototype
-python $PG/scripts/detector_filters/compare.py --data-root . \
-  --run off=runs/filters/off --run on=runs/filters/on --run on+dummy=runs/filters/on+dummy \
-  --prototype runs/filters/prototype --out filters_compare_b.md
-```
-
-**채택 기준 (b):** 덮은 recall 손실이 off 대비 1%p 이내이고, F2가 프로토타입 0.816 이상이어야 한다. `compare.py` 마지막 표가 둘을 판정한다. 하나라도 못 넘으면 "새로 놓친 비밀" 표에서 거르기 이름과 탐지기:규칙별로 원인을 본다.
-
-두 스크립트 모두 값은 출력하지 않는다.
+**채택 기준 (b):** CredData-trajectory test에서 덮은 recall 손실이 off 대비 1%p 이내이고, F2가 프로토타입 0.816 이상이어야 한다. 통합 표의 3번(+FILTERS)과 2번(전부 off)을 비교한다. 못 넘으면 "새로 놓친 정답" 표에서 거르기 이름과 탐지기:규칙별로 원인을 본다.
