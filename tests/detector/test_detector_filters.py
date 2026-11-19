@@ -84,6 +84,7 @@ REAL = ["p@ss(w0rd", "Tr0ub&dor", "a<b>c!9", "password123", "Hello(World)1", "my
         "cfg['deadbeefcafe']", 'get("abc123def")', "lookup('pass word')",
         # a lookup's default is a value, whatever its shape
         'os.getenv("DB_PASS", "changeme")', 'os.environ.get("ADMIN_PW", "admin")', 'config.get("db.password", "postgres")',
+        'os.getenv("DB_PASS", default="postgres")', "config.get('k', default='changeme')",
         # weak default passwords are values to mask, not placeholders (labeling guide, decision 3)
         "changeme", "CHANGEME", "change_me", "change-me", "changeit", "dummy"]
 
@@ -277,6 +278,10 @@ class DefaultValues(unittest.TestCase):
         ('const password = process.env.PW || "default"', "default"),
         ('password = config.get("db.password", "x9")', "x9"),
         ('password = os.getenv("DB_PASS", "DEFAULT_PASS")', "DEFAULT_PASS"),
+        # the default given as a keyword argument
+        ('password = os.getenv("DB_PASS", default="postgres")', "postgres"),
+        ("api_key = config.get('k', default='SYNTHx7Qk2m!pw')", "SYNTHx7Qk2m!pw"),
+        ('token = os.environ.get("K", default = "admin")', "admin"),
     ]
 
     def values(self, text: str, env: dict[str, str]) -> list[str]:
@@ -308,16 +313,17 @@ class DefaultValues(unittest.TestCase):
 
     def test_exceptions_are_not_candidates(self) -> None:
         for default in ("", "None", "null", "undefined", "${DB_PASS}"):
-            for env in ({}, ON):
-                with self.subTest(default=default, filters=bool(env)):
-                    self.assertNotIn(default, self.values(f'password = os.getenv("DB_PASS", "{default}")', env))
+            for form in ('password = os.getenv("DB_PASS", "{d}")', 'password = os.getenv("DB_PASS", default="{d}")'):
+                for env in ({}, ON):
+                    with self.subTest(default=default, keyword="default=" in form, filters=bool(env)):
+                        self.assertNotIn(default, self.values(form.replace("{d}", default), env))
 
     def test_a_placeholder_default_only_with_the_dummy_filter_on(self) -> None:
         for default in ("<password>", "your_api_key_here", "xxxxxxxx"):
-            with self.subTest(length=len(default)):
-                text = f'password = os.getenv("DB_PASS", "{default}")'
-                self.assertIn(default, self.values(text, ON))
-                self.assertNotIn(default, self.values(text, {**ON, **DUMMY}))
+            for text in (f'password = os.getenv("DB_PASS", "{default}")', f'password = os.getenv("DB_PASS", default="{default}")'):
+                with self.subTest(length=len(default), keyword="default=" in text):
+                    self.assertIn(default, self.values(text, ON))
+                    self.assertNotIn(default, self.values(text, {**ON, **DUMMY}))
 
     def test_the_key_argument_must_be_a_key_name(self) -> None:
         # Not a lookup when its first argument is not a key: no default candidate from it.
