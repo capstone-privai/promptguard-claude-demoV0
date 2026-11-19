@@ -145,6 +145,8 @@ Claude Code에서 `!`로 직접 실행한 명령과 그 출력은 `prompt.submit
 
 `PG_PLACEHOLDER_PUBLIC_PREFIX=on`이면 공개된 접두어가 있는 값을 `sk_live_[STRIPE_SECRET_KEY_1]`처럼 접두어를 남겨 가립니다. 기본은 꺼짐이고, 적용 대상은 [접두어 표](docs/PLACEHOLDER_PUBLIC_PREFIXES.md)에 있습니다.
 
+`PG_PLACEHOLDER_GUIDE=on`이면 시스템 프롬프트에 자리표시자 안내를 한 번 넣고, `PG_RESTORE_ESCAPED=on`이면 Grep 패턴과 Bash의 grep·rg·sed 인자에서 `\[TYPE_N\]`도 복원합니다. 둘 다 기본은 꺼짐입니다. `promptguard run`은 `--append-system-prompt`·`--system-prompt`(와 `-file` 형태)의 비밀을 Claude Code를 띄우기 전에 가립니다. 내용과 count_tokens 빈틈은 [자리표시자 안내와 빈틈](docs/PLACEHOLDER_GUIDE_AND_GAPS.md)에 있습니다.
+
 ### 원복한 값이 모델로 다시 실려 가는가? (E2E 검증)
 
 실제 Claude Code CLI + Native Mod + detector worker를 가짜 Anthropic API에 연결해, provider로 나가는 요청을 전부 기록하고 확인했습니다 (Claude Code 2.1.296에서 확인).
