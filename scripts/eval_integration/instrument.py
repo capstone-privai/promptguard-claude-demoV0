@@ -1,31 +1,63 @@
-"""Run promptguard-data's metric-detection scorer with PG_REMASK_SHORT and PG_SHELL_POSITIONAL_MIN set.
+"""Scorer instrumentation for scripts/eval_integration (moved from #23's detector_filters/run_eval.py and #24's
+remask_floor/run_eval.py, code unchanged).
 
-    python scripts/remask_floor/run_eval.py --data-root ../promptguard-data --config floor -- \\
-        run --system promptguard --system-root . --sessions metric-detection/data_test/sessions_from_SWE-Gym.jsonl \\
-        --out metric-detection/results/floor
-
---config: default (today: substring, positional minimum 1), boundary (PG_REMASK_SHORT=boundary only), min4
-(PG_SHELL_POSITIONAL_MIN=4 only) or floor (both). PG_SHELL_POSITIONAL_MIN is read by the system's shell-aware
-adapter, which the scorer loads in this process. PG_REMASK_SHORT belongs to the Native Mod, which the scorer replays
-in Python (promptguard_adapter.ModSession); for boundary this script swaps in a ModSession that re-masks a known
-value shorter than 8 characters only where no [A-Za-z0-9_] stands next to it, as register.mjs does. Values of 8
-characters and more, and the partial re-mask, run the scorer's own code. The scorer's repository is not changed.
-
-The scorer does not restore tool_input, so a restored short value is not replayed here; register.mjs applies the
-same boundary rule to it.
+- install_recorder: next to the run's files, filters.jsonl records per scanned item the count per filter name and
+  each removed finding's adapter, rule id, filter name and offsets. No text.
+- install_boundary: PG_REMASK_SHORT belongs to the Native Mod, which the scorer replays in Python
+  (promptguard_adapter.ModSession); for boundary this swaps in a ModSession that re-masks a known value shorter than 8
+  characters only where no [A-Za-z0-9_] stands next to it, as register.mjs does. The scorer does not restore
+  tool_input, so a restored short value is not replayed here; register.mjs applies the same rule to it.
+The scorer's repository is not changed.
 """
 
 from __future__ import annotations
 
-import argparse
-import os
 import re
-import sys
-from pathlib import Path
+from collections import Counter
 from typing import Any
 
-CONFIGS = {"default": ("substring", "1"), "boundary": ("boundary", "1"), "min4": ("substring", "4"), "floor": ("boundary", "4")}
+def install_recorder(module: Any, rows: list[dict[str, Any]]) -> None:
+    adapter_class = module.PromptGuardAdapter
+    run_session, scan = adapter_class.run_session, adapter_class._scan
+
+    def recording_run_session(self: Any, session: Any) -> Any:
+        self._filter_queue = [item.item_id for item in session.items if module.CHANNEL_MAP.get(item.channel) is not None]
+        self._filter_session = session.session_id
+        return run_session(self, session)
+
+    def recording_scan(self: Any, text: str, source: str) -> Any:
+        filters = getattr(self.detector, "filters", None)
+        removed: list[dict[str, Any]] = []
+        if filters is not None and not getattr(filters, "_recording", False):
+            apply = filters.apply
+
+            def apply_and_record(adapter: str, findings: Any, scanned: str, counts: Counter) -> Any:
+                kept = apply(adapter, findings, scanned, counts)
+                kept_ids = {id(finding) for finding in kept}
+                for finding in findings:
+                    if id(finding) not in kept_ids:
+                        filters._removed.append({"adapter": adapter, "rule_id": finding.rule_id,
+                                                 "filter": filters.reason(adapter, finding, scanned),
+                                                 "start": finding.start, "end": finding.end})
+                return kept
+
+            filters.apply, filters._recording = apply_and_record, True
+        if filters is not None:
+            filters._removed = removed
+        result = scan(self, text, source)
+        item_id = self._filter_queue.pop(0) if getattr(self, "_filter_queue", None) else None
+        counts = result.get("filtered", {}) if isinstance(result, dict) else {}
+        rows.append({"session_id": getattr(self, "_filter_session", None), "item_id": item_id,
+                     "filtered": counts, "removed": removed})
+        return result
+
+    adapter_class.run_session, adapter_class._scan = recording_run_session, recording_scan
+
+
+
 SHORT_REMASK = 8  # register.mjs SHORT_REMASK
+
+
 WORD_CHAR = "[A-Za-z0-9_]"
 
 
@@ -85,27 +117,3 @@ def install_boundary(module: Any) -> None:
 
     module.ModSession = BoundaryModSession
 
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--data-root", type=Path, required=True, help="promptguard-data checkout")
-    parser.add_argument("--config", choices=tuple(CONFIGS), required=True)
-    parser.add_argument("scorer_args", nargs=argparse.REMAINDER, help="-- then the scorer's arguments (run ...)")
-    args = parser.parse_args(argv)
-    scorer_args = args.scorer_args[1:] if args.scorer_args[:1] == ["--"] else args.scorer_args
-    remask, positional = CONFIGS[args.config]
-    os.environ["PG_REMASK_SHORT"], os.environ["PG_SHELL_POSITIONAL_MIN"] = remask, positional
-    root = args.data_root.resolve()
-    os.chdir(root)
-    sys.path.insert(0, str(root / "metric-detection"))
-    from evaluation import cli
-    from evaluation.adapters import promptguard_adapter
-
-    if remask == "boundary":
-        install_boundary(promptguard_adapter)
-    print(f"config {args.config}: PG_REMASK_SHORT={remask} PG_SHELL_POSITIONAL_MIN={positional}")
-    return cli.main(scorer_args)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

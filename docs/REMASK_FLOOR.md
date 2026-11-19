@@ -37,45 +37,9 @@
 
 ## 측정 (정우)
 
-promptguard-data 루트에서, 이 브랜치의 PromptGuard(`$PG`)로 ML을 끄고(기본) 돌린다.
+`eval/integration-1118`부터는 `scripts/eval_integration/run.py`가 한 번에 돌린다. 5번 설정(+REMASK_SHORT=boundary+POSITIONAL_MIN=4)이 이 PR이다. 실행 방법과 표의 열은 README의 "통합 측정"에 있다. 이 PR의 `scripts/remask_floor/run_eval.py`·`compare.py`는 그 실행기로 옮겨 합쳤다.
 
-`scripts/remask_floor/run_eval.py`는 채점기를 고치지 않는다.
 - **탐지기 설정:** `PG_SHELL_POSITIONAL_MIN`은 채점기가 같은 프로세스에서 부르는 탐지기가 읽는다.
-- **Mod 설정:** `PG_REMASK_SHORT`는 Native Mod의 설정이다. 채점기의 Mod 복제(`ModSession`)에는 이 규칙이 없으므로, 실행 중에만 짧은 값 부분을 `register.mjs`와 같은 규칙으로 바꿔 끼운다. 8자 이상과 부분 재마스킹은 채점기 코드를 그대로 쓴다.
-- **`--config`:** `default`, `boundary`, `min4`, `floor`(boundary + 4)가 있다. 원인을 나눠 보려면 `boundary`와 `min4`도 돌린다.
+- **Mod 설정:** `PG_REMASK_SHORT`는 Native Mod의 설정이라, 채점기의 Mod 복제(`ModSession`)에 짧은 값 부분만 `register.mjs`와 같은 규칙으로 바꿔 끼운다(`scripts/eval_integration/instrument.py`의 `install_boundary`, 코드 그대로). 8자 이상과 부분 재마스킹은 채점기 코드를 그대로 쓴다.
 
-#23의 `scripts/detector_filters/compare.py`는 main에 없고, 고유 값 수와 16진수 키 행이 없어서 쓰지 않았다. 대신 `scripts/remask_floor/compare.py`를 새로 만들었다.
-
-```bash
-PG=../promptguard-claude-demoV0
-# (a) 기존 9개 데이터셋 (eval/stage0-fp-analysis 브랜치)
-for cfg in default floor; do
-  for d in sessions sessions_2 sessions_from_example sessions_from_CredData sessions_from_noseyparker \
-           sessions_from_Nemotron-PII sessions_from_trajectory sessions_from_openhands-feedback sessions_from_SWE-Gym; do
-    python $PG/scripts/remask_floor/run_eval.py --data-root . --config $cfg -- \
-      run --system promptguard --system-root $PG \
-      --sessions metric-detection/data_test/$d.jsonl --out metric-detection/results/floor_$cfg
-  done
-done
-python $PG/scripts/remask_floor/compare.py --data-root . \
-  --run default=metric-detection/results/floor_default --run floor=metric-detection/results/floor_floor --out floor_compare_a.md
-
-# (b) creddata-v1 test 분할 (creddata-trajectory-data 브랜치)
-S=metric-detection/data_test/sessions_from_CredData-trajectory.jsonl
-for cfg in default floor; do
-  python $PG/scripts/remask_floor/run_eval.py --data-root . --config $cfg -- \
-    run --system promptguard --system-root $PG --sessions $S --out runs/floor/$cfg
-done
-python $PG/scripts/remask_floor/compare.py --data-root . \
-  --run default=runs/floor/default --run floor=runs/floor/floor --out floor_compare_b.md
-```
-
-`compare.py`는 데이터셋과 설정마다 다음을 **span 수와 고유 값 수**로 함께 낸다.
-- recall(정확히/덮었는가)과 precision(채점기 값)
-- 재마스킹 오탐: 병합된 finding span이 아니고 정답과 겹치지 않는 edit
-- "16진수 키인데 일부만 가려짐": 값이 16자 이상 16진수인 정답 중 status가 partial인 것
-- 새로 놓친 비밀: 정답 유형과 값 길이(<4, 4-7, 8+)별
-
-값은 메모리에서 해시로만 세고, 출력하지 않는다.
-
-**채택 기준:** 고유 값 기준 recall 손실 0, 그리고 재마스킹 오탐 감소. `compare.py` 마지막 표가 판정한다.
+**채택 기준:** 고유 값 기준 recall 손실 0, 그리고 재마스킹 오탐 감소. 통합 표의 5번과 2번을 비교한다("못 가린 span / 고유 값", "재마스킹 오탐", "새로 놓친 정답").
