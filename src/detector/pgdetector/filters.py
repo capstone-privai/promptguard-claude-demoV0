@@ -204,7 +204,7 @@ def key_name(value: str) -> bool:
 # An env or config lookup with a quoted default. Only the first argument is a key; the second is a value.
 _LOOKUP = re.compile(
     rf"(?:os\.getenv|os\.environ\.get|config\.get)\(\s*(?P<key>\"[^\"\n]*\"|'[^'\n]*'|{_IDENT})\s*,\s*"
-    r"(?P<quote>[\"'])(?P<default>[^\"'\n]*)(?P=quote)\s*\)?"
+    r"(?:default\s*=\s*)?(?P<quote>[\"'])(?P<default>[^\"'\n]*)(?P=quote)\s*\)?"
 )
 _NO_VALUE = {"none", "null", "undefined"}
 

@@ -48,9 +48,10 @@ PLACEHOLDER = re.compile(
     r"|(?i:true|false|null|none|undefined|redacted)"
 )
 # An env or config lookup with a quoted default, from the assignment's value on.
+# The default may be positional or the keyword default= (os.getenv("DB_PASS", default="...")).
 DEFAULT_CALL = re.compile(
     r"(?:os\.getenv|os\.environ\.get|config\.get)\(\s*(?P<key>\"[^\"\n]*\"|'[^'\n]*'|[A-Za-z_][\w.]*)\s*,\s*"
-    r"(?P<quote>[\"'])(?P<default>[^\"'\n]*)(?P=quote)"
+    r"(?:default\s*=\s*)?(?P<quote>[\"'])(?P<default>[^\"'\n]*)(?P=quote)"
 )
 DEFAULT_OR = re.compile(r"process\.env\.[A-Za-z_]\w*\s*(?:\|\||\?\?)\s*(?P<quote>[\"'`])(?P<default>[^\"'`\n]*)(?P=quote)")
 DOTENV_KEY = re.compile(r"[A-Z][A-Z0-9_]*")

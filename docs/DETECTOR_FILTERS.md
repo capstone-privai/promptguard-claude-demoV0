@@ -55,6 +55,7 @@
 - `os.environ.get(..., "…")`
 - `process.env.X || "…"`, `process.env.X ?? "…"`
 - `config.get(..., "…")`
+- 기본값은 위치 인자든 키워드 인자(`default="…"`, 예: `os.getenv("DB_PASS", default="postgres")`)든 같은 규칙과 같은 예외를 따른다.
 
 이전에는 다음과 같았다.
 - **거르기를 켠 경우:** 호출(`os.getenv(`)을 통째로 코드로 거르면서, 기본값의 비밀도 같이 버렸다.
