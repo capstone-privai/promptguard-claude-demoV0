@@ -14,6 +14,7 @@ const {
   forwardRequestHeaders,
   forwardResponseHeaders,
   loadConfig,
+  maskFlaggedStrings,
   providerUrl,
   requestModule,
   scanLeaves,
@@ -22,6 +23,7 @@ const {
 const SERVICE = 'promptguard-final-guard'
 const VERSION = '1.0.0'
 const ALLOWED_ENDPOINTS = new Set(['/v1/messages', '/v1/messages/count_tokens'])
+const MASK_ROUNDS = 3
 const SESSION_HEADERS = ['x-promptguard-session-id', 'x-claude-session-id', 'x-session-id']
 
 const ERROR_MESSAGES = Object.freeze({
@@ -29,6 +31,10 @@ const ERROR_MESSAGES = Object.freeze({
   BODY_TIMEOUT: 'PromptGuard timed out while receiving the request body.',
   CLIENT_ABORTED: 'The client closed the request before verification completed.',
   DETECTOR_FINDINGS: 'PromptGuard blocked sensitive content before transmission.',
+  // Hooks never see --system-prompt / --append-system-prompt; only the launcher masks them.
+  DETECTOR_FINDINGS_SYSTEM: 'PromptGuard blocked sensitive content in the system prompt before transmission. '
+    + 'If it came from --system-prompt, --append-system-prompt or their -file forms, start Claude Code with '
+    + '`promptguard run -- <claude arguments>` so those values are masked before Claude Code starts.',
   DETECTOR_HTTP_ERROR: 'PromptGuard verification is temporarily unavailable.',
   DETECTOR_MALFORMED_RESULT: 'PromptGuard could not verify this request safely.',
   DETECTOR_TIMEOUT: 'PromptGuard verification timed out.',
@@ -69,7 +75,7 @@ function sendGuardError(response, requestId, error) {
     error: {
       type: 'promptguard_block',
       code,
-      message: errorMessage(code),
+      message: errorMessage(error instanceof GuardError ? error.messageKey : code),
       request_id: requestId,
     },
   }, { 'x-promptguard-request-id': requestId })
@@ -339,18 +345,41 @@ class FinalGuard {
       context.bodySize = read.size
       const value = decodeJson(read.body)
       const items = collectStringLeaves(value)
+      // count_tokens answers with a number only, so masking it returns nothing of the content.
+      const maskable = pathname === '/v1/messages/count_tokens' && this.config.countTokensMode === 'mask'
       const scanStarted = process.hrtime.bigint()
-      let scan
+      let body = read.body
       try {
-        scan = await scanLeaves(this.detector, this.scanCache, items, context.requestId)
+        const scan = await scanLeaves(this.detector, this.scanCache, items, context.requestId, { complete: maskable })
+        context.findingCount = scan.findingCount
+        context.findingTypes = scan.findingTypes
+        this.stats.findings += scan.findingCount
+        if (scan.findingCount > 0 && !maskable) {
+          throw new GuardError('DETECTOR_FINDINGS', 422, scan.flaggedRoots.has('system') ? 'DETECTOR_FINDINGS_SYSTEM' : 'DETECTOR_FINDINGS')
+        }
+        if (scan.findingCount > 0) {
+          // The masked body must pass the same check. A value found only on a rescan is masked in a
+          // further round; anything still found after MASK_ROUNDS is refused like any other finding.
+          const naming = { assigned: new Map(), counters: new Map() }
+          const types = new Set(scan.findingTypes)
+          let current = value
+          let found = scan
+          for (let round = 1; ; round += 1) {
+            current = JSON.parse(maskFlaggedStrings(current, found.flagged, naming))
+            found = await scanLeaves(this.detector, this.scanCache, collectStringLeaves(current), `${context.requestId}.masked${round}`, { complete: true })
+            if (found.findingCount === 0) break
+            if (round === MASK_ROUNDS) throw new GuardError('DETECTOR_FINDINGS', 422)
+            context.findingCount += found.findingCount
+            for (const type of found.findingTypes) types.add(type)
+          }
+          context.findingTypes = [...types].sort()
+          body = Buffer.from(JSON.stringify(current), 'utf8')
+          context.masked = true
+        }
       } finally {
         context.scanLatencyMs = Number(process.hrtime.bigint() - scanStarted) / 1_000_000
       }
-      context.findingCount = scan.findingCount
-      context.findingTypes = scan.findingTypes
-      this.stats.findings += scan.findingCount
-      if (scan.findingCount > 0) throw new GuardError('DETECTOR_FINDINGS', 422)
-      await this.proxy(request, response, read.body, context)
+      await this.proxy(request, response, body, context)
     } catch (error) {
       if (response.headersSent || response.destroyed) return
       const safeError = error instanceof GuardError ? error : new GuardError('INTERNAL_ERROR', 500)
@@ -389,7 +418,7 @@ class FinalGuard {
           finding_count: context.findingCount,
           finding_types: context.findingTypes,
           decision: 'allow',
-          reason,
+          reason: context.masked && reason === 'FORWARDED' ? 'COUNT_TOKENS_MASKED' : reason,
           scan_latency_ms: context.scanLatencyMs,
           upstream_status: upstreamStatus,
         })

@@ -71,10 +71,13 @@ function startProvider(plan) {
     req.on('end', () => {
       const raw = Buffer.concat(chunks).toString('utf8')
       const body = raw ? JSON.parse(raw) : null
-      requests.push({ url: req.url, raw })
+      const entry = { url: req.url, raw }
+      requests.push(entry)
       if (!req.url.startsWith('/v1/messages') || req.url.includes('count_tokens')) {
+        // Not a real tokenizer: a fake count of body characters / 4, so masked and raw bodies differ.
+        entry.count = Math.ceil(raw.length / 4)
         res.writeHead(200, { 'content-type': 'application/json' })
-        return res.end(JSON.stringify({ input_tokens: 10, data: [] }))
+        return res.end(JSON.stringify({ input_tokens: entry.count, data: [] }))
       }
       const step = (body.tools || []).length ? plan(body) : null
       if (!body.stream) {
@@ -97,11 +100,11 @@ async function startWorker() {
   return { child, url }
 }
 
-async function startGuard(detectorUrl, upstreamUrl, dir) {
+async function startGuard(detectorUrl, upstreamUrl, dir, extra = {}) {
   const port = await freePort()
   const child = spawn(process.execPath, [path.join(ROOT, 'src/guard/final-guard.cjs')], {
     cwd: ROOT,
-    env: { ...process.env, PG_GUARD_PORT: String(port), PG_UPSTREAM_BASE_URL: upstreamUrl, PG_GUARD_DETECTOR_URL: detectorUrl, PG_DETECTOR_TIMEOUT_MS: '30000', PG_AUDIT_PATH: path.join(dir, 'guard-audit.jsonl'), PG_SESSION_HASH: 'ab'.repeat(16) },
+    env: { ...process.env, PG_GUARD_PORT: String(port), PG_UPSTREAM_BASE_URL: upstreamUrl, PG_GUARD_DETECTOR_URL: detectorUrl, PG_DETECTOR_TIMEOUT_MS: '30000', PG_AUDIT_PATH: path.join(dir, 'guard-audit.jsonl'), PG_SESSION_HASH: 'ab'.repeat(16), ...extra },
     stdio: 'ignore',
   })
   const url = `http://127.0.0.1:${port}`
@@ -109,14 +112,14 @@ async function startGuard(detectorUrl, upstreamUrl, dir) {
   return { child, url }
 }
 
-async function claude(name, { prompt = 'Do the task', args = [], env = {}, plan, guard = false, files = {} }, worker) {
+async function claude(name, { prompt = 'Do the task', args = [], env = {}, plan, guard = false, guardEnv = {}, files = {} }, worker) {
   const dir = path.join(OUT, name)
   fs.rmSync(dir, { recursive: true, force: true })
   const ws = path.join(dir, 'ws')
   fs.mkdirSync(ws, { recursive: true })
   for (const [file, text] of Object.entries(files)) fs.writeFileSync(path.join(ws, file), text)
   const provider = await startProvider(body => plan(body, ws))
-  const front = guard ? await startGuard(worker.url, provider.url, dir) : null
+  const front = guard ? await startGuard(worker.url, provider.url, dir, guardEnv) : null
   const mcpConfig = path.join(dir, 'mcp.json')
   fs.writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { pgdetector: { command: 'node', args: [path.join(ROOT, 'src/detector/mcp-bridge.cjs')] } } }))
   const base = { ...process.env }
@@ -135,15 +138,38 @@ async function claude(name, { prompt = 'Do the task', args = [], env = {}, plan,
   const answer = (() => { try { return JSON.parse(result.stdout).result } catch { return null } })()
   const guardAudit = fs.existsSync(path.join(dir, 'guard-audit.jsonl')) ? fs.readFileSync(path.join(dir, 'guard-audit.jsonl'), 'utf8').trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line)) : []
   const audit = fs.existsSync(path.join(dir, 'audit.json')) ? JSON.parse(fs.readFileSync(path.join(dir, 'audit.json'), 'utf8')) : []
-  return { code: result.code, answer, requests: provider.requests, guardAudit, audit, ws, dir }
+  return { code: result.code, answer, stdout: result.stdout, requests: provider.requests, guardAudit, audit, ws, dir }
 }
 
-const bigFile = () => {
+const LAST_LINE = 'END OF LOG heartbeat summary written'
+const bigFile = (chars = 36000) => {
   const lines = []
-  for (let i = 0; lines.join('\n').length < 36000; i++) lines.push(`${String(i).padStart(5, '0')} INFO worker heartbeat ok, queue depth ${i % 7}, latency ${i % 50}ms`)
+  for (let i = 0, size = 0; size < chars; i++) {
+    lines.push(`${String(i).padStart(5, '0')} INFO worker heartbeat ok, queue depth ${i % 7}, latency ${i % 50}ms`)
+    size += lines.at(-1).length + 1
+  }
   lines.splice(200, 0, `API_TOKEN=${TOKEN}`)
-  return `${lines.join('\n')}\n`
+  return `${lines.join('\n')}\n${LAST_LINE}\n`
 }
+// What the model got back for the Read: refused, truncated or the whole file; its size; masked or not.
+function readOutcome(r) {
+  for (const q of r.requests) {
+    if (q.url.includes('count_tokens') || !q.raw.includes('toolu_read')) continue
+    for (const message of JSON.parse(q.raw).messages) {
+      for (const block of Array.isArray(message.content) ? message.content : []) {
+        if (block.type !== 'tool_result' || block.tool_use_id !== 'toolu_read') continue
+        const text = typeof block.content === 'string' ? block.content : (block.content || []).map(part => part.text || '').join('')
+        const kind = /exceeds maximum allowed tokens/.test(text) ? 'refused' : text.includes(LAST_LINE) ? 'full' : 'truncated'
+        const lines = /showing (\d+) of (\d+) lines/.exec(text)
+        if (lines) return { kind: `truncated (${lines[1]} of ${lines[2]} lines, with a note)`, chars: text.length, masked: PLACEHOLDER.test(text), raw: text.includes(TOKEN) }
+        return { kind, chars: text.length, masked: PLACEHOLDER.test(text), raw: text.includes(TOKEN) }
+      }
+    }
+  }
+  return { kind: 'none', chars: 0, masked: false, raw: false }
+}
+const describeRead = o => `${o.kind}, ${o.chars} chars, placeholder ${o.masked}, raw ${o.raw}`
+const counts = r => r.requests.filter(q => q.url.includes('count_tokens')).map(q => q.count).join('/') || '-'
 const readOnce = file => (body, ws) => JSON.stringify(body.messages).includes('toolu_read') ? null : [[{ type: 'tool_use', id: 'toolu_read', name: 'Read', input: { file_path: path.join(ws, file) } }], 'tool_use']
 const raws = (r, value) => r.requests.filter(q => q.raw.includes(value))
 
@@ -164,6 +190,41 @@ try {
   checks.guard_no_raw_reached_the_api = raws(guarded, TOKEN).length === 0
   checks.guard_blocked_count_tokens = guarded.guardAudit.some(row => String(row.endpoint).includes('count_tokens') && row.decision === 'block')
   checks.guard_masked_file_reached_the_model = guarded.requests.some(q => q.raw.includes('toolu_read') && PLACEHOLDER.test(q.raw))
+
+  // (e) Read after count_tokens is refused, and PG_GUARD_COUNT_TOKENS=mask. 36,000 characters is above the engine's
+  // count_tokens threshold (a quarter of the 25,000-token Read limit) and under the limit; 130,000 is over the limit.
+  info.mod_only_read_36k = describeRead(readOutcome(modOnly))
+  info.guard_block_read_36k = describeRead(readOutcome(guarded))
+  checks.guard_block_read_36k_whole_file_masked = readOutcome(guarded).kind === 'full' && readOutcome(guarded).masked && !readOutcome(guarded).raw
+  const maskSmall = await claude('count-tokens-mask', { files: { 'big.log': bigFile() }, plan: readOnce('big.log'), guard: true, guardEnv: { PG_GUARD_COUNT_TOKENS: 'mask' } }, worker)
+  checks.mask_session_continued = maskSmall.code === 0 && maskSmall.answer === 'Finished.'
+  checks.mask_count_tokens_reached_the_api_masked = raws(maskSmall, TOKEN).length === 0 && maskSmall.requests.some(q => q.url.includes('count_tokens') && PLACEHOLDER.test(q.raw))
+  checks.mask_audit_count_tokens_masked = maskSmall.guardAudit.some(row => String(row.endpoint).includes('count_tokens') && row.decision === 'allow' && row.reason === 'COUNT_TOKENS_MASKED')
+  checks.mask_read_36k_whole_file_masked = readOutcome(maskSmall).kind === 'full' && readOutcome(maskSmall).masked && !readOutcome(maskSmall).raw
+  info.mask_read_36k = describeRead(readOutcome(maskSmall))
+  info.count_tokens_36k_fake_count = `mod only ${counts(modOnly)}, mask ${counts(maskSmall)}, block ${counts(guarded)}`
+  const big = bigFile(130000)
+  const modLarge = await claude('count-tokens-mod-only-130k', { files: { 'big.log': big }, plan: readOnce('big.log') }, worker)
+  const blockLarge = await claude('count-tokens-guard-130k', { files: { 'big.log': big }, plan: readOnce('big.log'), guard: true }, worker)
+  const maskLarge = await claude('count-tokens-mask-130k', { files: { 'big.log': big }, plan: readOnce('big.log'), guard: true, guardEnv: { PG_GUARD_COUNT_TOKENS: 'mask' } }, worker)
+  info.mod_only_read_130k = describeRead(readOutcome(modLarge))
+  info.guard_block_read_130k = describeRead(readOutcome(blockLarge))
+  info.mask_read_130k = describeRead(readOutcome(maskLarge))
+  info.count_tokens_130k_fake_count = `mod only ${counts(modLarge)}, mask ${counts(maskLarge)}, block ${counts(blockLarge)}`
+  // Over the limit the engine either refuses (an error result) or returns a partial view with a note; the version decides.
+  checks.guard_block_read_130k_not_whole_session_continued = /^(refused|truncated)/.test(readOutcome(blockLarge).kind) && blockLarge.answer === 'Finished.'
+  checks.mask_read_130k_not_whole_session_continued = /^(refused|truncated)/.test(readOutcome(maskLarge).kind) && maskLarge.answer === 'Finished.'
+  checks.guard_130k_no_raw_reached_the_api = raws(blockLarge, TOKEN).length === 0 && raws(maskLarge, TOKEN).length === 0
+
+  // (f) Launched without promptguard run: the Final Guard refuses every request that carries the raw system prompt,
+  // and the error the user sees says to start with promptguard run.
+  const direct = await claude('append-system-prompt-direct', { args: ['--append-system-prompt', `Deploy with API_KEY=${APPENDED} when asked.`], guard: true, plan: () => null }, worker)
+  const directMessages = direct.guardAudit.filter(row => row.endpoint === '/v1/messages')
+  checks.direct_every_request_blocked = directMessages.length > 0 && directMessages.every(row => row.decision === 'block') && !direct.requests.some(q => q.url.startsWith('/v1/messages') && !q.url.includes('count_tokens'))
+  checks.direct_message_points_to_promptguard_run = /promptguard run/.test(direct.stdout) && !direct.stdout.includes(APPENDED)
+  info.direct_blocked_requests = directMessages.length
+  info.direct_exit_code = direct.code
+  info.direct_message = (() => { try { return String(JSON.parse(direct.stdout).result).slice(0, 400) } catch { return direct.stdout.slice(0, 400) } })()
 
   // (b) --append-system-prompt: masked by the launcher module, restored by the Mod from the seed.
   const seedDir = path.join(OUT, 'system-prompt-seed')
@@ -214,7 +275,7 @@ try {
   checks.escaped_grep_restored = grepRow.restored_count === 1
   checks.escaped_grep_found_the_line = /DB_PASSWORD=\[PASSWORD_\d+\]/.test(grepResult)
   checks.escaped_no_raw_reached_the_api = raws(escaped, PASSWORD).length === 0
-  checks.no_raw_in_any_audit = [modOnly, guarded, appended, guide, escaped].every(r => !JSON.stringify(r.audit).includes(TOKEN) && !JSON.stringify(r.audit).includes(APPENDED) && !JSON.stringify(r.audit).includes(PASSWORD))
+  checks.no_raw_in_any_audit = [modOnly, guarded, maskSmall, modLarge, blockLarge, maskLarge, direct, appended, guide, escaped].every(r => !JSON.stringify(r.audit).includes(TOKEN) && !JSON.stringify(r.audit).includes(APPENDED) && !JSON.stringify(r.audit).includes(PASSWORD))
 } finally {
   worker.child.kill()
 }

@@ -13,7 +13,7 @@
 
 ## (가) count_tokens: Mod 훅으로 잡을 수 없다
 
-Claude Code 2.1.291(고정 버전)과 2.1.312의 엔진 코드를 확인했다. 2.1.319는 이 PC에 없고, 외부에서 받지 않았다.
+Claude Code 2.1.291(고정 버전), 2.1.312, 2.1.319(정우의 측정 엔진)의 엔진 코드를 확인했다.
 
 - **Read 도구:** 파일 내용을 돌려주기 전에 크기를 검사한다. 추정 토큰이 한도(`CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS`, 기본 25,000)의 1/4을 넘으면, **원본 내용 그대로** `/v1/messages/count_tokens`를 보내 정확한 수를 센다. 3만~4만 자 출력이 이 구간이다.
 - **MCP 도구:** 큰 출력도 같은 방식으로 센다.
@@ -22,6 +22,70 @@ Claude Code 2.1.291(고정 버전)과 2.1.312의 엔진 코드를 확인했다. 
   - 엔진은 count_tokens가 실패하면 로컬 추정값으로 넘어간다.
   - 실제 엔진에서 Guard가 count_tokens를 막아도 세션이 계속되고, 가린 파일이 모델에 도착하는 것을 확인했다(`tests/e2e/gaps.mjs`).
 - **metric-task:** `m2.py`는 Final Guard 없이 Mod만으로 돌리므로, 이 경로는 측정에서 계속 새어 나간다.
+
+### count_tokens가 막힌 뒤 Read가 하는 일
+
+Read의 크기 검사는 이렇게 동작한다. 2.1.319 코드를 읽었고, 2.1.291과 2.1.319 모두 실제 엔진으로 확인했다.
+
+1. 로컬 추정 토큰 수가 한도(25,000)의 1/4 이하이면 count_tokens를 보내지 않는다.
+2. 그보다 크면 count_tokens를 보낸다. 실패하면(Guard의 422 포함) 오류 없이 **로컬 추정값을 대신 쓴다**.
+3. 그 수가 한도 이하이면 파일 전체를 돌려준다.
+4. 한도를 넘으면 거절하지 않는다. 한도에 맞춰 앞부분만 돌려주고 "PARTIAL view … showing N of M lines" 안내를 붙인다. 오류("exceeds maximum allowed tokens")로 거절하는 것은 count_tokens 전에, 파일이 한도 × 128자(약 320만 자)를 넘을 때뿐이다.
+
+| 파일 | Mod만 | Guard block | Guard mask |
+|---|---|---|---|
+| 3만 6천 자 (한도 아래) | 전체 | 전체 (로컬 추정값으로 판단) | 전체 |
+| 13만 자 (한도 위) | 1,398 / 2,177줄 + 안내 | 1,422 / 2,177줄 + 안내 | 1,398 / 2,177줄 + 안내 |
+
+- 줄 수의 차이는 어떤 수로 판단했느냐에서 나온다. block은 엔진의 로컬 추정값을, Mod만·mask는 서버가 센 수를 쓴다. 이 시험의 서버 수는 가짜(본문 글자 수 / 4)다. 실제 API에서는 차이의 크기와 방향이 다를 수 있다.
+- 어느 경우든 Read 결과는 `tool.call` 훅에서 Mod가 가린 뒤 본 요청에 들어갔다. 본 요청의 Read 결과에는 자리표시자만 있었고 원래 값은 없었다.
+- `tests/e2e/gaps.mjs`가 확인한다. 2.1.291과 2.1.319가 같았다.
+
+### `PG_GUARD_COUNT_TOKENS=block|mask` (기본 block)
+
+- **block:** 지금까지처럼 count_tokens에서 비밀이 나오면 422로 막는다. 엔진은 로컬 추정값을 쓴다.
+- **mask:** count_tokens 요청에 한해 탐지한 값을 자리표시자로 바꿔 보낸다. 응답이 토큰 수뿐이라 내용은 돌아오지 않는다.
+  - 탐지기의 span으로 값을 `[TYPE_N]`으로 바꾼다. 같은 값은 같은 자리표시자가 되고, 번호는 요청 안 문서 순서를 따른다. 다른 문자열과 JSON 모양은 그대로다.
+  - 바꾼 본문을 다시 검사한다. 다시 검사할 때 새로 나온 값도 같은 방식으로 가리고, 세 번 안에 깨끗해지지 않으면 422로 막는다.
+  - 감사 로그: `decision: allow`, `reason: COUNT_TOKENS_MASKED`, `finding_count`는 가린 값 수. 스키마는 바뀌지 않는다.
+  - `/v1/messages`는 mask여도 지금처럼 막는다.
+  - 다른 값이면 Guard가 시작하지 않는다.
+- **차이:**
+  - block에서는 엔진이 로컬 추정값으로 판단하고, mask에서는 서버가 센 수(가린 본문 기준)로 판단한다.
+  - 가린 본문은 원래보다 조금 짧다(값 길이와 자리표시자 길이의 차이만큼).
+  - 두 설정 모두 세션은 계속된다. 다만 한도 근처에서 로컬 추정값과 서버 수가 한도의 다른 쪽에 있으면, 한쪽은 전체를 읽고 다른 쪽은 부분만 읽는다. 한도를 넘은 파일은 부분 읽기의 줄 수가 달라진다(위 표: 1,422줄과 1,398줄).
+  - 토큰 수(가짜 서버 수): 3만 6천 자 파일은 Mod만 9,208, mask 9,203이었다. 13만 자 파일은 Mod만 33,087, mask 33,081이었다. block에서는 서버가 세지 않는다.
+
+## (다) 엔진이 직접 조립하는 다른 컨텍스트
+
+`tests/e2e/contexts.mjs`가 소스마다 합성 비밀 하나를 넣고 네 번 돌린다: 실험용 Mod(훅에 보이는지, 기록만 함), Mod만, Mod+Guard, Guard만(Mod 없음).
+
+| 소스 | 요청에서 들어가는 곳 | (a) 값을 실은 훅 | (b) Mod만: 서버로 감 | Mod+Guard | (c) Guard만: 세션 계속 |
+|---|---|---|---|---|---|
+| CLAUDE.md (프로젝트) | `messages` | prompt.context, prompt.attachment | 안 감 | 계속, 차단 0 | 멈춤 |
+| CLAUDE.md (사용자, `CLAUDE_CONFIG_DIR`) | `messages` | prompt.context, prompt.attachment | 안 감 | 계속, 차단 0 | 멈춤 |
+| CLAUDE.local.md | `messages` | prompt.context, prompt.attachment | 안 감 | 계속, 차단 0 | 멈춤 |
+| CLAUDE.md의 `@파일` import | `messages` | prompt.context, prompt.attachment | 안 감 | 계속, 차단 0 | 멈춤 |
+| 출력 스타일 (`outputStyle`) | `messages` | prompt.attachment | 안 감 | 계속, 차단 0 | 멈춤 |
+| 스킬 본문 (Skill 도구 호출) | `messages` | skill.prompt | 안 감 | 계속, 차단 0 | 멈춤 |
+| 스킬 설명 (목록) | `messages` | prompt.attachment | 안 감 | 계속, 차단 0 | 멈춤 |
+| 슬래시 명령 파일 | `messages` | prompt.attachment, skill.prompt | 안 감 | 계속, 차단 0 | 멈춤 |
+| MCP 서버 instructions | `messages` | prompt.attachment | 안 감 | 계속, 차단 0 | 멈춤 |
+
+(모든 소스가 `session.append`에도 실린다.) 2.1.291과 2.1.319가 같았다.
+
+- 아홉 소스 모두 훅에 보이고 Mod가 가린다. 그래서 런처에서 따로 가릴 경로는 없다. 훅에 안 보이는 것은 지금까지 확인한 `--system-prompt`·`--append-system-prompt`(와 `-file` 형태)뿐이다.
+- Mod 없이 Guard만 있으면 매 요청이 같은 값을 실어 모두 막히고, 세션은 첫 응답을 받지 못한 채 "API Error: 422 PromptGuard blocked sensitive content before transmission."으로 끝난다. 2.1.291은 한 번, 2.1.319는 같은 요청을 다섯 번 더 보낸 뒤 끝난다(6번 차단).
+
+## (라) 런처 없이 `--append-system-prompt`로 띄웠을 때
+
+`claude --append-system-prompt "<비밀>"`을 런처 없이 Guard 앞에서 띄우면 매 요청이 막힌다. 고치기 전에는 사용자가 "API Error: 422 PromptGuard blocked sensitive content before transmission."만 보았다. 무엇을 해야 하는지 알 수 없었다.
+
+이제 막힌 값이 요청의 `system`에 있으면 다음 메시지를 보낸다(오류 코드와 감사 로그의 `reason`은 그대로 `DETECTOR_FINDINGS`).
+
+> PromptGuard blocked sensitive content in the system prompt before transmission. If it came from --system-prompt, --append-system-prompt or their -file forms, start Claude Code with `promptguard run -- <claude arguments>` so those values are masked before Claude Code starts.
+
+Guard는 `system` 아래 문자열을 먼저 검사한다. 그래서 다른 곳에도 비밀이 있어 검사를 일찍 멈추더라도, `system`에서 나온 것은 놓치지 않는다.
 
 ## (나) 시스템 프롬프트: 런처에서 가린다
 
