@@ -95,7 +95,8 @@ describe('count_tokens mode', { concurrency: 1 }, () => {
       audits[mode] = path.join(temp, `${mode}.jsonl`)
       port = await availablePort(port + 1)
       const env = { ...base, PG_GUARD_PORT: String(port), PG_AUDIT_PATH: audits[mode] }
-      if (mode !== 'default') env.PG_GUARD_COUNT_TOKENS = mode
+      // default: unset (an empty value is the default), whatever the shell sets
+      env.PG_GUARD_COUNT_TOKENS = mode === 'default' ? '' : mode
       guards[mode] = await startProcess(path.join(ROOT, 'src/guard/final-guard.cjs'), env)
     }
   })
