@@ -6,13 +6,17 @@ rule only fires where no specific rule already claimed the value.
 
 from __future__ import annotations
 
+import os
 import re
+import threading
 from bisect import bisect_left
+from collections import Counter
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from ..adapter import DetectorAdapter, RawFinding
 from ..core import BENIGN_VARIABLES, pem_body_lines
+from ..filters import CLOSED_CALL, assignment_value_is_code, lookup_default_is_value, lookup_key
 
 
 # (rule_id, type, lower-case literals one of which every match contains, pattern
@@ -43,6 +47,24 @@ PLACEHOLDER = re.compile(
     r"|(?:process\.env|os\.environ|import\.meta\.env)\b.*"
     r"|(?i:true|false|null|none|undefined|redacted)"
 )
+# An env or config lookup with a quoted default, from the assignment's value on.
+# The default may be positional or the keyword default= (os.getenv("DB_PASS", default="...")).
+DEFAULT_CALL = re.compile(
+    r"(?:os\.getenv|os\.environ\.get|config\.get)\(\s*(?P<key>\"[^\"\n]*\"|'[^'\n]*'|[A-Za-z_][\w.]*)\s*,\s*"
+    r"(?:default\s*=\s*)?(?P<quote>[\"'])(?P<default>[^\"'\n]*)(?P=quote)"
+)
+DEFAULT_OR = re.compile(r"process\.env\.[A-Za-z_]\w*\s*(?:\|\||\?\?)\s*(?P<quote>[\"'`])(?P<default>[^\"'`\n]*)(?P=quote)")
+DOTENV_KEY = re.compile(r"[A-Z][A-Z0-9_]*")
+
+
+def dotenv_assignment(text: str, found: re.Match[str]) -> bool:
+    """KEY=value at the start of a line (or after export), upper-case key, no space around =: a dotenv literal."""
+    if not DOTENV_KEY.fullmatch(found.group("key")) or text[found.end("key"):found.end()] != "=":
+        return False
+    line_start = text.rfind("\n", 0, found.start("key")) + 1
+    return text[line_start:found.start("key")].strip() in ("", "export")
+
+
 CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 KEY_PARTS = re.compile(r"[_.\-]+")
 # ``token_url``, ``password_file`` ... name where a secret lives, not the secret.
@@ -96,6 +118,23 @@ class PatternAdapter(DetectorAdapter):
     def __init__(self, name: str, options: Mapping[str, Any], config_dir: Path) -> None:
         super().__init__(name, options, config_dir)
         self.min_value_length = int(options.get("min_value_length", 8))
+        # PG_DETECTOR_FILTERS=on: secret-assignment skips a value that is a reference, a call, code or a template,
+        # and counts it by reason for the ensemble (declined), per text of this thread's batch.
+        self.skip_code_values = os.environ.get("PG_DETECTOR_FILTERS") == "on"
+        # PG_DETECTOR_FILTER_DUMMY=on: a lookup default that is a placeholder (<password>) is not a candidate.
+        self.dummy_on = os.environ.get("PG_DETECTOR_FILTER_DUMMY") == "on"
+        self._batch = threading.local()
+
+    def scan_many(self, texts: Sequence[str]) -> list[list[RawFinding]]:
+        self._batch.declined = []
+        out = []
+        for text in texts:
+            self._batch.declined.append(Counter())
+            out.append(self.scan(text))
+        return out
+
+    def declined(self) -> list[Mapping[str, int]] | None:
+        return [dict(counts) for counts in getattr(self._batch, "declined", [])] or None
 
     def scan(self, text: str) -> list[RawFinding]:
         findings: list[RawFinding] = []
@@ -118,7 +157,38 @@ class PatternAdapter(DetectorAdapter):
             if value is None:
                 continue
             start, end = value.start(), value_end(text, *value.span())
+            # The quoted default of an env or config lookup (os.getenv("DB_PASS", "<secret>"), process.env.X || "...")
+            # is a candidate of its own, with the filters on or off. os.environ.get and process.env were never read
+            # before (PLACEHOLDER), so this widens detection apart from the filters. Only the first argument must be a
+            # key name; the default is a value whatever its shape (changeme, admin), but for lookup_default_is_value's
+            # exceptions. The call itself (os.getenv() is then not reported, filters on or off.
+            default = DEFAULT_CALL.match(text, start) or DEFAULT_OR.match(text, start)
+            if default and "key" in default.groupdict() and not lookup_key(default.group("key")):
+                default = None
+            if default:
+                d_start, d_end = default.span("default")
+                if lookup_default_is_value(text[d_start:d_end], self.dummy_on) and not claimed.overlaps(d_start, d_end):
+                    findings.append(RawFinding(d_start, d_end, finding_type, "secret-assignment", "moderate"))
+                    if self.skip_code_values:
+                        declined = getattr(self._batch, "declined", None)
+                        if declined:
+                            declined[-1]["assignment_code"] += 1
+                    continue
             if not self._plausible(text[start:end]):
+                continue
+            # ASSIGNMENT takes the opening quote, so a quoted value has its quote right before and after it.
+            # A dotenv line (DB_PASSWORD=alpha.bravo.charlie) is a literal too, quoted or not.
+            quoted = start > 0 and text[start - 1] in "\"'`" and end < len(text) and text[end] == text[start - 1]
+            quoted = quoted or dotenv_assignment(text, found)
+            # VALUE stops at a quote, so a call is judged with its arguments when it closes on the line: a quoted
+            # argument that is not a key name keeps it.
+            call = CLOSED_CALL.match(text, start)
+            judged = call.group() if call and call.end() > end else text[start:end]
+            reason = assignment_value_is_code(judged, quoted) if self.skip_code_values else None
+            if reason:
+                declined = getattr(self._batch, "declined", None)
+                if declined:
+                    declined[-1][reason] += 1
                 continue
             if claimed.overlaps(start, end):
                 continue
