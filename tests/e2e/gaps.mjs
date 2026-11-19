@@ -18,6 +18,8 @@ const APPENDED = 'SYNTHappendKey_4qM8vK2pR7xN5sL9' // in --append-system-prompt
 const PASSWORD = 'Synth.Pa$s_92qDemo' // regex and shell characters on purpose
 const GUIDE_MARK = 'PromptGuard: a bracketed name'
 const PLACEHOLDER = /\[[A-Z_]+_\d+\]/
+// Cases that check the default pin it, so the script gives the same answer with every setting on in the shell.
+const BLOCK = { PG_GUARD_COUNT_TOKENS: 'block' }
 
 const freePort = () => new Promise((resolve, reject) => {
   const probe = net.createServer()
@@ -184,7 +186,7 @@ try {
   info.mod_only_raw_in_count_tokens = raws(modOnly, TOKEN).some(q => q.url.includes('count_tokens'))
   // With the Final Guard in front (promptguard run): the count_tokens request is refused (422) and never reaches the
   // API; Claude Code falls back to its own estimate and the session goes on with the masked file.
-  const guarded = await claude('count-tokens-guard', { files: { 'big.log': bigFile() }, plan: readOnce('big.log'), guard: true }, worker)
+  const guarded = await claude('count-tokens-guard', { files: { 'big.log': bigFile() }, plan: readOnce('big.log'), guard: true, guardEnv: BLOCK }, worker)
   checks.guard_claude_exit_0 = guarded.code === 0
   checks.guard_session_continued = guarded.answer === 'Finished.'
   checks.guard_no_raw_reached_the_api = raws(guarded, TOKEN).length === 0
@@ -205,7 +207,7 @@ try {
   info.count_tokens_36k_fake_count = `mod only ${counts(modOnly)}, mask ${counts(maskSmall)}, block ${counts(guarded)}`
   const big = bigFile(130000)
   const modLarge = await claude('count-tokens-mod-only-130k', { files: { 'big.log': big }, plan: readOnce('big.log') }, worker)
-  const blockLarge = await claude('count-tokens-guard-130k', { files: { 'big.log': big }, plan: readOnce('big.log'), guard: true }, worker)
+  const blockLarge = await claude('count-tokens-guard-130k', { files: { 'big.log': big }, plan: readOnce('big.log'), guard: true, guardEnv: BLOCK }, worker)
   const maskLarge = await claude('count-tokens-mask-130k', { files: { 'big.log': big }, plan: readOnce('big.log'), guard: true, guardEnv: { PG_GUARD_COUNT_TOKENS: 'mask' } }, worker)
   info.mod_only_read_130k = describeRead(readOutcome(modLarge))
   info.guard_block_read_130k = describeRead(readOutcome(blockLarge))
@@ -251,7 +253,7 @@ try {
   const guide = await claude('guide', { env: { PG_PLACEHOLDER_GUIDE: 'on' }, files: { '.env': `DB_PASSWORD=${PASSWORD}\n` }, plan: readOnce('.env') }, worker)
   const messages = guide.requests.filter(q => q.url.startsWith('/v1/messages') && !q.url.includes('count_tokens'))
   checks.guide_once_in_each_request = messages.length > 0 && messages.every(q => q.raw.split(GUIDE_MARK).length - 1 === 1)
-  const off = await claude('guide-off', { files: { '.env': `DB_PASSWORD=${PASSWORD}\n` }, plan: readOnce('.env') }, worker)
+  const off = await claude('guide-off', { env: { PG_PLACEHOLDER_GUIDE: 'off' }, files: { '.env': `DB_PASSWORD=${PASSWORD}\n` }, plan: readOnce('.env') }, worker)
   checks.guide_absent_when_off = off.requests.every(q => !q.raw.includes(GUIDE_MARK))
   info.guide_chars = (messages[0]?.raw.match(/PromptGuard: a bracketed name[^"]*/)?.[0] ?? '').length
 

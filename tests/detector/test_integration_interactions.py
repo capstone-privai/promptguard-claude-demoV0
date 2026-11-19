@@ -83,6 +83,17 @@ class TypedAssignmentUnderFilters(unittest.TestCase):
                     self.assertTrue(covers(scan(text, env), text, value))
 
 
+    def test_merge_order_lookup_default_before_parameter_default(self) -> None:
+        # Step 2 (#23's lookup default) runs before step 3 (#26's typed parameter default), so the default literal of
+        # a lookup is a candidate even as a parameter's default; a plain parameter default is not.
+        text = 'def connect(password: str = os.getenv("DB_PASSWORD", "SynthDflt9q")):'
+        plain = 'def connect(password: str = "SynthParam9q"):'
+        for env in (OFF, ON, ALL_ON):
+            with self.subTest(filters=env["PG_DETECTOR_FILTERS"], dummy=env["PG_DETECTOR_FILTER_DUMMY"]):
+                self.assertTrue(covers(scan(text, env), text, "SynthDflt9q"))
+                self.assertEqual(scan(plain, env)["finding_count"], 0)
+
+
 class EscapedValuesUnderFilters(unittest.TestCase):
     """A value #26 extends over \\" \\' \\\\ is judged whole by #23's filters, not as code or HTML."""
 
