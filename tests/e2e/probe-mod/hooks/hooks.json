@@ -1,0 +1,1 @@
+{ "description": "E2E probe: records which hooks see which test tag", "modules": ["./register.mjs"] }
