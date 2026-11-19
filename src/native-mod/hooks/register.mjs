@@ -11,9 +11,16 @@ let prefixTable = null
 const PREFIX_TABLE = '../../docs/PLACEHOLDER_PUBLIC_PREFIXES.md'
 // A shorter rest is too little to hide once the prefix is shown, so such a value is masked whole.
 const PUBLIC_PREFIX_MIN_REST = 16
+// PG_REMASK_SHORT: "substring" (default, today's behaviour) or "boundary". Read once per session in sanitize.
+let remaskShort = null
+// boundary: a known value shorter than this is re-masked only where it stands as a word.
+const SHORT_REMASK = 8
+const WORD_CHAR = '[A-Za-z0-9_]'
 const PLACEHOLDER_PATTERN = /\[[A-Z0-9_]+_\d+\]/g
 // Tools that execute locally. Model-bound tools (Agent, WebFetch, ...) never get raw values.
 const RESTORE_TOOLS = new Set(['Bash', 'PowerShell', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Grep'])
+// The launcher's system-prompt seed (src/launcher/system-prompt.cjs), loaded once per session.
+let seedLoaded = false
 const TOOL_META_KEYS = new Set(['tool', 'tool_use_id'])
 // session.append doors whose content no earlier hook sanitized. `command` is `!` shell mode:
 // its <bash-input>/<bash-stdout> rows skip prompt.submit and tool.call entirely.
@@ -100,23 +107,174 @@ function restoreText(text, counter) {
   })
 }
 
-function restoreToolInput(e) {
+function restoreToolInput(e, escaped = false) {
   const counter = { count: 0 }
+  // PG_RESTORE_ESCAPED=on: a regex-escaped placeholder in a regex argument first (metric-task t14 wrote
+  // \[TOKEN_1\] in a Grep pattern and got no match), then the plain form everywhere as before.
+  let source = e
+  if (escaped && e.tool === 'Grep' && typeof e.pattern === 'string') source = { ...e, pattern: restoreEscapedPattern(e.pattern, 'ere', counter) }
+  if (escaped && e.tool === 'Bash' && typeof e.command === 'string') source = { ...e, command: restoreEscapedCommand(e.command, counter) }
   const input = {}
-  for (const [key, item] of Object.entries(e)) input[key] = TOOL_META_KEYS.has(key) ? item : mapStrings(item, text => restoreText(text, counter))
+  for (const [key, item] of Object.entries(source)) input[key] = TOOL_META_KEYS.has(key) ? item : mapStrings(item, text => restoreText(text, counter))
   return { input, restoredCount: counter.count }
+}
+
+// Escaped restore. \[TYPE_N\] (the placeholder escaped for a regex) becomes the real value escaped for the same
+// regex dialect; only in a Grep pattern and in the arguments of grep, egrep, fgrep, rg and sed in a Bash command,
+// where a model writes a regex. A bare TYPE_N is never restored: it is also an ordinary code identifier.
+const ESCAPED_PLACEHOLDER = /\\\[([A-Z0-9_]+_\d+)\\\]/g
+const REGEX_META = { bre: /[\\.*[\]^$]/g, ere: /[\\.+*?()|[\]{}^$]/g }
+const REGEX_COMMANDS = new Set(['grep', 'egrep', 'fgrep', 'rg', 'sed'])
+const COMMAND_PREFIXES = new Set(['sudo', 'command', 'env', 'time', 'nice'])
+
+function escapedValue(text, offset, name) {
+  const placeholder = `[${name}]`
+  if (!vault.has(placeholder)) return null
+  const prefix = publicPrefixes.get(placeholder)
+  const inPlace = !prefix || (offset >= prefix.length && text.startsWith(prefix, offset - prefix.length))
+  return inPlace ? vault.get(placeholder) : prefix + vault.get(placeholder)
+}
+
+function restoreEscapedPattern(pattern, dialect, counter) {
+  return pattern.replace(ESCAPED_PLACEHOLDER, (match, name, offset) => {
+    const raw = escapedValue(pattern, offset, name)
+    if (raw === null) return match
+    counter.count++
+    return dialect === 'fixed' ? raw : raw.replace(REGEX_META[dialect], '\\$&')
+  })
+}
+
+// The quote state ('n' none, 's' single, 'd' double) at each index, and the command segments between unquoted
+// | ; & and newlines. A small scanner: enough to place a placeholder and pick its command, not a shell parser.
+function shellLayout(command) {
+  const quote = new Array(command.length)
+  const segments = []
+  let state = 'n'
+  let segmentStart = 0
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i]
+    quote[i] = state
+    if (state === 's') { if (char === "'") state = 'n'; continue }
+    if (state === 'd') {
+      if (char === '\\' && i + 1 < command.length) { quote[++i] = 'd'; continue }
+      if (char === '"') state = 'n'
+      continue
+    }
+    if (char === '\\' && i + 1 < command.length) { quote[++i] = 'n'; continue }
+    if (char === "'") state = 's'
+    else if (char === '"') state = 'd'
+    else if ('|;&\n'.includes(char)) { segments.push([segmentStart, i]); segmentStart = i + 1 }
+  }
+  segments.push([segmentStart, command.length])
+  return { quote, segments }
+}
+
+// The regex dialect of a segment's command (bre, ere or fixed), or null when it is not grep, rg or sed.
+function segmentDialect(command, quote, start, end) {
+  const words = []
+  let word = ''
+  for (let i = start; i < end; i++) {
+    if (quote[i] === 'n' && /\s/.test(command[i])) { if (word) words.push(word); word = ''; continue }
+    word += command[i]
+  }
+  if (word) words.push(word)
+  const plain = words.map(w => w.replace(/^['"]|['"]$/g, ''))
+  let at = 0
+  while (at < plain.length && (COMMAND_PREFIXES.has(plain[at]) || /^[A-Za-z_]\w*=/.test(plain[at]))) at++
+  const name = (plain[at] || '').split(/[\\/]/).pop().replace(/\.exe$/i, '')
+  if (!REGEX_COMMANDS.has(name)) return null
+  const flags = plain.slice(at + 1).filter(w => /^-/.test(w))
+  const short = flags.filter(f => /^-[A-Za-z]+$/.test(f)).join('')
+  const has = (letter, long) => short.includes(letter) || flags.includes(long)
+  if (name === 'fgrep' || ((name === 'grep' || name === 'rg') && has('F', '--fixed-strings'))) return { name, dialect: 'fixed' }
+  if (name === 'rg' || name === 'egrep') return { name, dialect: 'ere' }
+  if (name === 'grep') return { name, dialect: has('E', '--extended-regexp') || has('P', '--perl-regexp') ? 'ere' : 'bre' }
+  return { name, dialect: has('E', '--regexp-extended') || has('r', '--regexp-extended') ? 'ere' : 'bre' }
+}
+
+function shellQuoted(value, state) {
+  if (state === 's') return value.replace(/'/g, "'\\''")
+  if (state === 'd') return value.replace(/[\\$`"]/g, '\\$&')
+  return value.replace(/[^A-Za-z0-9_./:@%+=,-]/g, '\\$&')
+}
+
+function restoreEscapedCommand(command, counter) {
+  if (!command.includes('\\[')) return command
+  const { quote, segments } = shellLayout(command)
+  const commands = segments.map(([start, end]) => ({ start, end, command: segmentDialect(command, quote, start, end) }))
+  return command.replace(ESCAPED_PLACEHOLDER, (match, name, offset) => {
+    const segment = commands.find(item => offset >= item.start && offset < item.end)
+    if (!segment?.command) return match
+    const raw = escapedValue(command, offset, name)
+    if (raw === null) return match
+    counter.count++
+    let value = segment.command.dialect === 'fixed' ? raw : raw.replace(REGEX_META[segment.command.dialect], '\\$&')
+    if (segment.command.name === 'sed' && segment.command.dialect !== 'fixed') value = value.replace(/\//g, '\\/')
+    return shellQuoted(value, quote[offset])
+  })
+}
+
+// The launcher masks Claude Code's system prompt flags (no hook sees them) and writes their placeholders here:
+// registering them first keeps one placeholder per value and numbering unique. A seed that cannot be read fails
+// the scan (and so blocks), since a number the system prompt already uses could be given to another value.
+async function loadSeed($) {
+  if (seedLoaded) return
+  const path = await $.env.get('PG_MOD_SEED_FILE')
+  if (!path) { seedLoaded = true; return }
+  const entries = JSON.parse(String(await $.fs.read(path))).entries
+  if (!Array.isArray(entries)) throw new Error('PromptGuard system prompt seed malformed')
+  for (const entry of entries) {
+    const kind = /^\[([A-Z0-9_]+)_(\d+)\]$/.exec(entry?.placeholder ?? '')
+    if (!kind || typeof entry.raw !== 'string' || !entry.raw || typeof entry.value_hash !== 'string') throw new Error('PromptGuard system prompt seed malformed')
+    ledger.set(entry.value_hash, entry.placeholder)
+    vault.set(entry.placeholder, entry.raw)
+    if (!reverseVault.has(entry.raw)) reverseVault.set(entry.raw, entry.placeholder)
+    counters.set(kind[1], Math.max(counters.get(kind[1]) || 0, Number(kind[2])))
+  }
+  seedLoaded = true
+  if (entries.length) await $.fs.write(path, '{"entries":[]}\n')
+}
+
+// PG_PLACEHOLDER_GUIDE=on: one section at the end of every composed system prompt. In metric-task (161 tasks) a
+// model stopped on a key that arrived as [SECRET_1] (g29), "fixed" a password bug it could not see (t12), and ten
+// successful runs told the user the file held a fake string. The tool list is RESTORE_TOOLS itself, so the guide
+// never promises a restore the Mod does not make. No placeholder-shaped example (digits), so nothing restores it.
+function placeholderGuide(escaped) {
+  const tools = [...RESTORE_TOOLS]
+  const list = `${tools.slice(0, -1).join(', ')} or ${tools.at(-1)}`
+  return [
+    'PromptGuard: a bracketed name such as [TYPE_N] (for example [PASSWORD_N] or [API_KEY_N], N a number) is a real value',
+    'that PromptGuard hid before it reached you; the user did give it.',
+    `Written in the input of ${list}, it becomes the real value right before the tool runs; other tools get it as written.`,
+    ...(escaped ? ['In a Grep pattern, and in grep, rg and sed arguments in Bash, the regex-escaped form \\[TYPE_N\\] is replaced by the regex-escaped value.'] : []),
+    'Do not ask the user for the value again, and do not report that a file contains a placeholder or a fake string.',
+    'If you need a property of the value (its length, a character it contains), check it with a local command that uses',
+    'the placeholder, and do not print the value.',
+  ].join(' ')
 }
 
 // Replaces known raw values with their placeholders, even where the detector would miss them
 // (e.g. a restored password echoed alone on a line). Longest first so substrings never win.
+//
+// With PG_REMASK_SHORT=boundary a value shorter than SHORT_REMASK characters is replaced only where no
+// [A-Za-z0-9_] stands right before or after it. A short value found once (shell-aware's "e" in
+// CreateOrUpdateEnvSecret(ctx, 1, "e", input), CredData-trajectory test) was otherwise masked inside every word
+// and hex key that contains it. Any other character, Hangul included, is a boundary: "비밀번호는mgb입니다" still
+// masks mgb. Longer values and remaskPartial are unchanged.
 function remaskText(text, counter) {
   if (!reverseVault.size) return text
   let out = text
   for (const raw of [...reverseVault.keys()].sort((a, b) => b.length - a.length)) {
     if (!out.includes(raw)) continue
+    const replacement = maskedForm(reverseVault.get(raw))
+    if (remaskShort === 'boundary' && raw.length < SHORT_REMASK) {
+      const word = new RegExp(`(?<!${WORD_CHAR})${raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!${WORD_CHAR})`, 'g')
+      out = out.replace(word, () => { counter.count++; return replacement })
+      continue
+    }
     const parts = out.split(raw)
     counter.count += parts.length - 1
-    out = parts.join(maskedForm(reverseVault.get(raw)))
+    out = parts.join(replacement)
   }
   return remaskPartial(out, counter)
 }
@@ -320,6 +478,8 @@ function rebuild(value, byId, cursor = { value: 0 }) {
 }
 
 async function sanitize($, value, source, signal) {
+  if (remaskShort === null) remaskShort = await $.env.get('PG_REMASK_SHORT') === 'boundary' ? 'boundary' : 'substring'
+  await loadSeed($)
   await loadPrefixTable($)
   const entries = collectStrings(value, source)
   const scanned = await scanBatch($, entries, signal)
@@ -486,6 +646,10 @@ export function register(on) {
     const result = await next(e)
     const sections = []
     for (const section of result.sections) sections.push({ ...section, text: await sanitizeAndAudit($, section.text, 'automatic_context', { signal: next.signal, hook: 'prompt.compose' }) })
+    // After sanitizing: the guide is PromptGuard's own text, never sent to the detector or masked.
+    if (await $.env.get('PG_PLACEHOLDER_GUIDE') === 'on') {
+      sections.push({ id: 'promptguard:placeholder-guide', text: placeholderGuide(await $.env.get('PG_RESTORE_ESCAPED') === 'on'), scope: 'session' })
+    }
     return { ...result, sections }
   }).catch(catchPromptCompose)
 
@@ -497,7 +661,8 @@ export function register(on) {
     if (e.tool === 'mcp__pgdetector__scan_batch') return next(e)
     const operation = ++toolOperation
     const restoreEnabled = RESTORE_TOOLS.has(e.tool) && await $.env.get('PG_RESTORE_PLACEHOLDERS') !== 'off'
-    const { input, restoredCount } = restoreEnabled ? restoreToolInput(e) : { input: e, restoredCount: 0 }
+    const escaped = restoreEnabled && await $.env.get('PG_RESTORE_ESCAPED') === 'on'
+    const { input, restoredCount } = restoreEnabled ? restoreToolInput(e, escaped) : { input: e, restoredCount: 0 }
     const lifecycle = { findingCount: null, types: {}, latencyMs: 0, findings: [] }
     const extra = { hook: 'tool.call', tool: e.tool, operation, restored_count: restoredCount }
     await appendAudit($, toolSource(e, false), lifecycle, { ...extra, event: 'tool_started' })

@@ -225,6 +225,8 @@ describe('production-style Final Guard', { concurrency: 1 }, () => {
       PG_GUARD_MAX_BODY: String(64 * 1024),
       PG_AUDIT_PATH: auditPath,
       PG_SESSION_HASH: SESSION_HASH,
+      // The block contract for count_tokens too, whatever the shell sets (PG_GUARD_COUNT_TOKENS=mask has its own tests).
+      PG_GUARD_COUNT_TOKENS: 'block',
     })
   })
 

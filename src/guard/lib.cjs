@@ -6,6 +6,7 @@ const crypto = require('node:crypto')
 const path = require('node:path')
 
 const DEFAULT_MAX_BODY = 8 * 1024 * 1024
+const FILTER_SETTINGS = new Set(['PG_DETECTOR_FILTERS', 'PG_DETECTOR_FILTER_DUMMY'])
 const DEFAULT_DETECTOR_TIMEOUT = 5_000
 const DEFAULT_UPSTREAM_TIMEOUT = 120_000
 const DEFAULT_BODY_TIMEOUT = 15_000
@@ -30,12 +31,22 @@ const HOP_BY_HOP_HEADERS = new Set([
 ])
 
 class GuardError extends Error {
-  constructor(code, statusCode = 422) {
+  // messageKey picks a more specific user-facing message; code and audit reason stay the same.
+  constructor(code, statusCode = 422, messageKey = code) {
     super(code)
     this.name = 'GuardError'
     this.code = code
     this.statusCode = statusCode
+    this.messageKey = messageKey
   }
+}
+
+const COUNT_TOKENS_MODES = new Set(['block', 'mask'])
+
+function parseCountTokensMode(value) {
+  if (value === undefined || value === '') return 'block'
+  if (!COUNT_TOKENS_MODES.has(value)) throw new Error('PG_GUARD_COUNT_TOKENS must be block or mask')
+  return value
 }
 function parseInteger(name, raw, fallback, minimum, maximum) {
   if (raw === undefined || raw === '') return fallback
@@ -123,26 +134,34 @@ function loadConfig(env = process.env) {
     ),
     auditPath: env.PG_AUDIT_PATH || auditDefault,
     sessionHash: parseSessionHash(env.PG_SESSION_HASH),
+    // Set by the supervisor when the Native Mod's and this Guard's detector workers report different
+    // PG_DETECTOR_FILTERS / PG_DETECTOR_FILTER_DUMMY settings: the names that differ, never values.
+    filterMismatch: Object.freeze(String(env.PG_DETECTOR_FILTER_MISMATCH || '').split(',')
+      .map(name => name.trim()).filter(name => FILTER_SETTINGS.has(name))),
+    countTokensMode: parseCountTokensMode(env.PG_GUARD_COUNT_TOKENS),
   })
 }
 
+// root: the top-level key the leaf sits under ('system', 'messages', ...), or null.
 function collectStringLeaves(value) {
   const output = []
-  const stack = [value]
+  const stack = [[value, null]]
   while (stack.length > 0) {
-    const item = stack.pop()
+    const [item, root] = stack.pop()
     if (typeof item === 'string') {
       if (output.length >= MAX_STRING_LEAVES) throw new GuardError('TOO_MANY_STRING_LEAVES', 422)
-      output.push({ id: output.length, text: item, source: 'outbound' })
+      output.push({ id: output.length, text: item, source: 'outbound', root })
       continue
     }
     if (Array.isArray(item)) {
-      for (let index = item.length - 1; index >= 0; index -= 1) stack.push(item[index])
+      for (let index = item.length - 1; index >= 0; index -= 1) stack.push([item[index], root])
       continue
     }
     if (item && typeof item === 'object') {
-      const values = Object.values(item)
-      for (let index = values.length - 1; index >= 0; index -= 1) stack.push(values[index])
+      const entries = Object.entries(item)
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        stack.push([entries[index][1], item === value ? entries[index][0] : root])
+      }
     }
   }
   return output
@@ -305,6 +324,7 @@ class DetectorClient {
       findingCount,
       findingTypes: [...findingTypes].sort(),
       findingCounts: new Map(response.items.map(result => [result.id, result.findings.length])),
+      findingSpans: new Map(response.items.map(result => [result.id, result.findings.map(f => ({ start: f.start, end: f.end, type: f.type }))])),
       latencyMs: Number(elapsedNs) / 1_000_000,
     }
   }
@@ -341,19 +361,27 @@ class CleanScanCache {
 
 // Scans only the distinct leaves not already known clean, in bounded batches. Stops at the first
 // batch with a finding: the request is blocked either way, so later batches would only add delay.
-async function scanLeaves(detector, cache, leaves, requestId) {
+// complete: scan every batch and return each flagged text's spans (count_tokens masking).
+// System-prompt leaves go first, so a finding there is always seen before the early stop.
+async function scanLeaves(detector, cache, leaves, requestId, { complete = false } = {}) {
   const pending = new Map()
   for (const leaf of leaves) {
     const digest = cache.digest(leaf.text)
-    if (pending.has(digest)) pending.get(digest).occurrences += 1
-    else if (!cache.has(digest)) pending.set(digest, { text: leaf.text, occurrences: 1 })
+    if (pending.has(digest)) {
+      pending.get(digest).occurrences += 1
+      if (leaf.root) pending.get(digest).roots.add(leaf.root)
+    } else if (!cache.has(digest)) {
+      pending.set(digest, { text: leaf.text, occurrences: 1, roots: new Set(leaf.root ? [leaf.root] : []) })
+    }
   }
 
-  const unique = [...pending]
+  const unique = [...pending].sort(([, a], [, b]) => Number(b.roots.has('system')) - Number(a.roots.has('system')))
   const findingTypes = new Set()
+  const flaggedRoots = new Set()
+  const flagged = new Map()
   let findingCount = 0
   let latencyMs = 0
-  for (let start = 0; start < unique.length && findingCount === 0; start += DETECTOR_BATCH_SIZE) {
+  for (let start = 0; start < unique.length && (complete || findingCount === 0); start += DETECTOR_BATCH_SIZE) {
     const batch = unique.slice(start, start + DETECTOR_BATCH_SIZE)
     const items = batch.map(([, entry], id) => ({ id, text: entry.text, source: 'outbound' }))
     const result = await detector.scan(items, `${requestId}.${start / DETECTOR_BATCH_SIZE}`)
@@ -361,18 +389,57 @@ async function scanLeaves(detector, cache, leaves, requestId) {
     for (const type of result.findingTypes) findingTypes.add(type)
     batch.forEach(([digest, entry], id) => {
       const count = result.findingCounts.get(id)
-      if (count === 0) cache.add(digest)
-      else findingCount += count * entry.occurrences
+      if (count === 0) {
+        cache.add(digest)
+        return
+      }
+      findingCount += count * entry.occurrences
+      for (const root of entry.roots) flaggedRoots.add(root)
+      if (complete) flagged.set(entry.text, result.findingSpans.get(id))
     })
   }
 
   return {
     findingCount,
     findingTypes: [...findingTypes].sort(),
+    flaggedRoots,
+    flagged,
     scannedCount: unique.length,
     cachedCount: leaves.length - unique.reduce((total, [, entry]) => total + entry.occurrences, 0),
     latencyMs,
   }
+}
+
+// Re-serializes value with every flagged span replaced by [TYPE_n]. The same text gets the same
+// placeholder; numbering follows document order. Overlapping spans merge into one. Pass the same
+// naming to later rounds so their placeholders continue the numbering.
+function maskFlaggedStrings(value, flagged, naming = { assigned: new Map(), counters: new Map() }) {
+  const { assigned, counters } = naming
+  const placeholder = (raw, type) => {
+    if (!assigned.has(raw)) {
+      const next = (counters.get(type) || 0) + 1
+      counters.set(type, next)
+      assigned.set(raw, `[${type}_${next}]`)
+    }
+    return assigned.get(raw)
+  }
+  const mask = text => {
+    const spans = [...flagged.get(text)].sort((a, b) => a.start - b.start || b.end - a.end)
+    const merged = []
+    for (const span of spans) {
+      const last = merged.at(-1)
+      if (last && span.start < last.end) last.end = Math.max(last.end, span.end)
+      else merged.push({ ...span })
+    }
+    let output = ''
+    let cursor = 0
+    for (const span of merged) {
+      output += text.slice(cursor, span.start) + placeholder(text.slice(span.start, span.end), span.type)
+      cursor = span.end
+    }
+    return output + text.slice(cursor)
+  }
+  return JSON.stringify(value, (_key, item) => (typeof item === 'string' && flagged.has(item) ? mask(item) : item))
 }
 
 function connectionTokens(headers) {
@@ -425,6 +492,7 @@ module.exports = {
   forwardRequestHeaders,
   forwardResponseHeaders,
   loadConfig,
+  maskFlaggedStrings,
   providerUrl,
   requestModule,
   scanLeaves,

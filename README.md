@@ -81,6 +81,8 @@ Claude 인수를 넘길 때는 `--` 뒤에 적습니다. 예: `../promptguard ru
 
 Final Guard는 실제 Anthropic upstream으로 전달되는 `/v1/messages`와 `/v1/messages/count_tokens` JSON의 모든 문자열 leaf를 다시 검사합니다. finding뿐 아니라 detector timeout, crash, malformed response, body 제한 위반과 알 수 없는 endpoint도 provider 전송 전에 차단합니다. 요청 원문, credential, authorization header는 audit에 남기지 않습니다.
 
+`PG_GUARD_COUNT_TOKENS=mask`이면 count_tokens 요청에 한해 422 대신 탐지한 값을 자리표시자로 바꿔 보냅니다(기본 `block`). count_tokens의 응답은 토큰 수뿐이라 내용이 돌아오지 않습니다. 시스템 프롬프트에서 비밀이 나와 막을 때는 `promptguard run`으로 실행하라는 안내를 오류 메시지에 붙입니다. 자세한 내용은 [자리표시자 안내와 빈틈](docs/PLACEHOLDER_GUIDE_AND_GAPS.md)에 있습니다.
+
 이미 깨끗하다고 판정된 문자열은 다시 검사하지 않으므로, 매 turn 반복되는 system prompt와 tool 정의는 세션의 첫 요청에서만 검사됩니다. 그래서 첫 요청은 오래 걸릴 수 있고(claude.ai 커넥터가 많으면 10~20초), 이후 요청은 새로 추가된 대화만 검사합니다.
 
 > 두 worker는 process와 lifecycle이 독립적이지만 같은 최신 detector ensemble 설정을 사용합니다. 따라서 Mod 장애, 변환 뒤 재노출, worker 하나의 장애를 최종 전송 지점에서 막는 의미가 있습니다. 반면 모든 adapter가 공통으로 놓치는 패턴은 Guard도 놓칠 수 있으므로, detector 다양성과 coverage 검증은 별도 과제입니다.
@@ -144,6 +146,42 @@ Claude Code에서 `!`로 직접 실행한 명령과 그 출력은 `prompt.submit
 원복을 끄려면 `PG_RESTORE_PLACEHOLDERS=off`를 지정합니다. re-mask는 그대로 동작합니다.
 
 `PG_PLACEHOLDER_PUBLIC_PREFIX=on`이면 공개된 접두어가 있는 값을 `sk_live_[STRIPE_SECRET_KEY_1]`처럼 접두어를 남겨 가립니다. 기본은 꺼짐이고, 적용 대상은 [접두어 표](docs/PLACEHOLDER_PUBLIC_PREFIXES.md)에 있습니다.
+
+`PG_DETECTOR_FILTERS=on`이면 탐지기가 구조상 비밀일 수 없는 값(HTML 조각, 코드 호출, CSS 값, 템플릿, `secret-assignment`의 참조·코드 값)을 합집합 전에 거릅니다. `PG_DETECTOR_FILTER_DUMMY=on`은 예시·더미 값을 따로 거릅니다. 둘 다 기본은 꺼짐이고, 기준은 [탐지기 거르기](docs/DETECTOR_FILTERS.md)에 있습니다.
+
+`PG_REMASK_SHORT=boundary`이면 8자 미만 값은 단어 경계가 맞는 곳에서만 다시 가리고, `PG_SHELL_POSITIONAL_MIN=4`이면 shell-aware가 함수 이름 단서로 잡는 4자 미만 위치 인자를 내지 않습니다. 기본값은 지금 동작(`substring`, `1`)이고, 기준은 [짧은 값 재마스킹](docs/REMASK_FLOOR.md)에 있습니다.
+
+`PG_PLACEHOLDER_GUIDE=on`이면 시스템 프롬프트에 자리표시자 안내를 한 번 넣고, `PG_RESTORE_ESCAPED=on`이면 Grep 패턴과 Bash의 grep·rg·sed 인자에서 `\[TYPE_N\]`도 복원합니다. 둘 다 기본은 꺼짐입니다. `promptguard run`은 `--append-system-prompt`·`--system-prompt`(와 `-file` 형태)의 비밀을 Claude Code를 띄우기 전에 가립니다. 내용과 count_tokens 빈틈은 [자리표시자 안내와 빈틈](docs/PLACEHOLDER_GUIDE_AND_GAPS.md)에 있습니다.
+
+### 설정 한눈에 보기 (eval/integration-1118)
+
+이 브랜치는 PR #23, #24, #25, #26을 합친 측정용 브랜치입니다. 모든 설정은 환경변수이고, 기본값이면 main과 같은 동작입니다(아래 "항상 켜진 변경"은 제외).
+
+| 설정 | 기본값 | 켰을 때 바뀌는 것 | 출처 |
+|---|---|---|---|
+| `PG_DETECTOR_FILTERS` | `off` | `on`: 탐지기가 합집합 전에 구조상 비밀일 수 없는 후보를 거릅니다(HTML 조각, 코드 호출·색인, CSS 값, 템플릿). `secret-assignment`는 참조·호출·코드·템플릿 값을 내지 않습니다. 고신뢰 규칙(`src/detector/high-confidence-rules.json`)은 거르지 않습니다. Mod와 Guard의 설정이 다르면 Guard의 차단 메시지가 알려 줍니다 | #23 |
+| `PG_DETECTOR_FILTER_DUMMY` | `off` | `on`: 예시·더미 값(`<password>`, `your_*_here`, `xxx`, `***`, `placeholder` 등)을 따로 거릅니다. 조회 호출 기본값이 이런 모양이어도 후보가 아닙니다. `changeme` 같은 약한 기본값은 거르지 않습니다 | #23 |
+| `PG_REMASK_SHORT` | `substring` | `boundary`: 8자 미만 값은 앞뒤에 `[A-Za-z0-9_]`가 붙지 않은 곳에서만 다시 가립니다 | #24 |
+| `PG_SHELL_POSITIONAL_MIN` | `1` | `4`: shell-aware가 함수 이름 단서로 잡는 위치 인자 중 4자 미만은 내지 않습니다 | #24 |
+| `PG_RULE_HEX_KEY` | `off` | `on`: 키 이름(`key`, `api_key`, `secret_key` 등) 옆 따옴표 안의 32~64자 16진수를 `hex-key`로 찾습니다. Go의 `Key: String("…")`도 포함합니다. hash·sha·commit 같은 이름은 뺍니다 | #26 |
+| `PG_PLACEHOLDER_GUIDE` | `off` | `on`: 시스템 프롬프트 끝에 자리표시자 안내(627자)를 요청마다 한 번 넣습니다 | #25 |
+| `PG_RESTORE_ESCAPED` | `off` | `on`: Grep의 `pattern`과 Bash의 grep·rg·sed 인자에서 `\[TYPE_N\]`을 같은 문법으로 이스케이프한 실제 값으로 복원합니다 | #25 |
+| `PG_GUARD_COUNT_TOKENS` | `block` | `mask`: Final Guard가 count_tokens 요청에 한해 422 대신 탐지한 값을 자리표시자로 바꿔 보냅니다. `/v1/messages`는 그대로 막습니다 | #25 |
+
+**설정 없이 항상 켜진 변경**
+
+| 출처 | 변경 |
+|---|---|
+| #23 | 조회 호출 기본값: `os.getenv("KEY", "<기본값>")`, `os.environ.get(…, default="…")`, `process.env.X \|\| "…"`의 따옴표 기본값을 후보로 냅니다(첫 인자는 키 이름이어야 함) |
+| #23 | .env 리터럴: 줄 맨 앞(또는 `export` 뒤)의 대문자 `KEY=value`는 따옴표가 없어도 리터럴로 봅니다 |
+| #26 | `basic-auth`: `Authorization: Basic <base64>`를 엄격히 디코드해 `user:pass`일 때 |
+| #26 | `sql-password`: `IDENTIFIED BY '…'`, `WITH PASSWORD '…'`, `CREATE/ALTER USER\|ROLE … PASSWORD '…'`, `SET PASSWORD … = '…'` (3자 이상) |
+| #26 | 이스케이프: 따옴표 값에 `\"` `\'` `\\`가 있으면 진짜 닫는 따옴표까지(`secret-assignment`, shell-aware 함수 인자·`send(...)`) |
+| #26 | 타입 표기 대입: `db_password: str = "…"`, `DB_PASSWORD: Final = "…"`. 매개변수 기본값과 `name: Type` 선언은 값으로 보지 않습니다 |
+| #26 | 줄인 이름: `pw`, `db_pw`, `pass_word`. `pwd` 하나뿐인 이름은 뺍니다 |
+| #26 | PEM 패딩: CredSweeper의 base64 PEM span이 뒤의 `=`까지 덮습니다 |
+| #25 | 런처의 시스템 프롬프트 가리기: `promptguard run`이 `--system-prompt`·`--append-system-prompt`(와 `-file`)의 비밀을 Claude Code를 띄우기 전에 가리고 Mod에 대응표를 넘깁니다 |
+| #25 | Guard 안내 메시지: 시스템 프롬프트에서 비밀이 나와 막을 때 `promptguard run`으로 실행하라고 알려 줍니다 |
 
 ### 원복한 값이 모델로 다시 실려 가는가? (E2E 검증)
 
@@ -275,6 +313,84 @@ class MyAdapter(DetectorAdapter):
 ```
 
 `detector.json`에 `{"name": "my-tool", "type": "my_package.my_module:MyAdapter"}`처럼 `module:Class` 경로로 등록하면 기본 adapter 목록을 고치지 않아도 됩니다(모듈은 `src/detector` 아래 또는 `PYTHONPATH`에 있어야 합니다). 자주 쓰는 adapter는 `pgdetector/adapters/__init__.py`의 `ADAPTER_TYPES`에 짧은 이름으로 추가할 수 있습니다. 같은 adapter 종류를 옵션만 바꿔 다른 이름으로 여러 번 등록해도 각각 1표로 셉니다.
+
+## 통합 측정 (eval/integration-1118)
+
+### 탐지 지표: 7개 설정을 한 번에
+
+`scripts/eval_integration/run.py`가 promptguard-data의 채점기(`creddata-trajectory-data` 브랜치: 덮은 recall, 글자 precision, F2, `per_finding.jsonl`)로 아래 7개 설정을 돌리고 `report.md` 한 장을 냅니다. promptguard-data는 읽기만 합니다.
+
+| 번호 | 설정 |
+|---|---|
+| 1 | main 668c2c1 (실행기가 `--out` 아래에 worktree를 만듭니다) |
+| 2 | 이 브랜치, 전부 off |
+| 3 | 2 + `PG_DETECTOR_FILTERS=on` |
+| 4 | 2 + `PG_DETECTOR_FILTERS=on` + `PG_DETECTOR_FILTER_DUMMY=on` |
+| 5 | 2 + `PG_REMASK_SHORT=boundary` + `PG_SHELL_POSITIONAL_MIN=4` |
+| 6 | 2 + `PG_RULE_HEX_KEY=on` |
+| 7 | 전부 on (`PG_PLACEHOLDER_GUIDE`, `PG_RESTORE_ESCAPED`, `PG_GUARD_COUNT_TOKENS`는 탐지 채점에 영향이 없지만 함께 켭니다) |
+
+```bash
+cd promptguard-data   # creddata-trajectory-data 브랜치
+PG=../promptguard-claude-demoV0   # eval/integration-1118
+python $PG/scripts/eval_integration/run.py --data-root . \
+  --creddata metric-detection/data_test/sessions_from_CredData-trajectory.jsonl \
+  --nine metric-detection/data_test/sessions.jsonl metric-detection/data_test/sessions_2.jsonl \
+         metric-detection/data_test/sessions_from_example.jsonl metric-detection/data_test/sessions_from_CredData.jsonl \
+         metric-detection/data_test/sessions_from_noseyparker.jsonl metric-detection/data_test/sessions_from_Nemotron-PII.jsonl \
+         metric-detection/data_test/sessions_from_trajectory.jsonl metric-detection/data_test/sessions_from_openhands-feedback.jsonl \
+         metric-detection/data_test/sessions_from_SWE-Gym.jsonl \
+  --out runs/eval-integration-1118 --jobs 2 --gitleaks ../tools/gitleaks-8.30.1
+```
+
+- **돌리는 범위:** CredData-trajectory test는 7개 설정 모두, 기존 9셋은 1번과 7번만 돌립니다. 실제 트래픽(openhands-feedback, SWE-Gym)은 "1,000줄당 오탐" 열을 채우려고 7개 설정 모두 돌립니다.
+- **이어 돌리기:** 끝난 실행은 다시 돌리지 않습니다(`--force`로 다시). `--report-only`는 표만 다시 만듭니다.
+- **표의 열:** recall(덮었는가), 글자 precision, F2, 못 가린 span 수 / 고유 값 수, 재마스킹 오탐, 실제 트래픽 1,000줄당 오탐, 거르기별 걸러낸 수, 새로 놓친 정답 수.
+  - 새로 놓친 정답은 2번은 1번과, 3~7번은 2번과 비교합니다. 정답 유형, 기준 설정에서 찾은 규칙, 이 설정에서 그 위를 거른 거르기, 값 모양(종류·길이)별로 따로 표를 냅니다.
+- **7번은 후보 등급별로도 나눕니다.**
+  - 바로 가림: `src/detector/high-confidence-rules.json`의 규칙이거나 strong 등급인 후보
+  - 애매함: 그 밖의 moderate·ambiguous 후보
+  - 각 등급의 TP·FP와, 애매함 구간에서 그 규칙만 찾은 정답 수를 냅니다.
+- **값은 출력하지 않습니다.** 값은 메모리에서 모양을 보고 고유 값을 세는 데만 씁니다.
+- recall과 precision은 채점기의 `per_span`·`per_edit`에서 다시 세고 `metrics.json`과 비교합니다. 다르면 표 끝에 적습니다.
+
+### 지표 2 (작업 성공): metric-task
+
+정우 노션의 방법대로 `m2.py`로 돌립니다. `m2.py`는 셸의 환경변수를 Claude Code에 그대로 넘기므로, 설정은 환경변수로 줍니다. 측정 엔진은 Claude Code 2.1.319입니다.
+
+**1. gold 과제 × 3회: main 대비 GUIDE+RESTORE_ESCAPED on.** 이 비교에는 Final Guard를 앞에 두지 않습니다. Guard의 실제 탐지기가 gold 조건(정답으로 가리기)에 섞이기 때문입니다.
+
+```bash
+cd promptguard-data
+PG=../promptguard-claude-demoV0
+TASKS="t12 t14 g29 s08 s11 s34 s35 s36 s70 n03 n14 n24 g23 t09 t10 t11 t15 t16 t17 s29 s30 s72 s73 s74 s75 s76 s77 s78 s79 s80"
+git -C $PG switch --detach 668c2c1
+python3 metric-task/scripts/m2.py run --tasks $TASKS --conditions gold --reps 3 --model sonnet --jobs 2 --system-root $PG --name integ_before
+git -C $PG switch eval/integration-1118
+PG_PLACEHOLDER_GUIDE=on PG_RESTORE_ESCAPED=on python3 metric-task/scripts/m2.py run --tasks $TASKS --conditions gold --reps 3 --model sonnet --jobs 2 --system-root $PG --name integ_after
+python3 metric-task/scripts/m2.py report runs/metric-task/integ_before --out metric-task/results/integ_before
+python3 metric-task/scripts/m2.py report runs/metric-task/integ_after --out metric-task/results/integ_after
+```
+
+잴 것: 작업 성공률, 멈춤 비율, 자리표시자를 파일 내용으로 보고한 비율, 서버에 간 비밀 수(늘면 안 됨).
+
+**2. 빈틈 확인 n19, n27 (count_tokens):** Final Guard를 앞에 두고 `PG_GUARD_COUNT_TOKENS=block`과 `mask`로 각각 1회 돌립니다. 서버에 간 비밀 수와 세션이 끝났는지를 봅니다.
+
+**3. 빈틈 확인 g11, s09 (시스템 프롬프트):** 런처로 시스템 프롬프트를 먼저 가리고 1회 돌립니다.
+
+```bash
+node $PG/src/launcher/system-prompt.cjs --detector-url http://127.0.0.1:<탐지기 포트> --seed-file <run_dir>/seed.json -- <m2.py가 넘기는 claude 인자>
+# 출력은 가린 인자의 JSON 배열입니다. 시드를 썼으면 Claude Code에 PG_MOD_SEED_FILE=<run_dir>/seed.json을 줍니다.
+```
+
+**정우 하네스(`m2.py`)에서 바꿔야 할 점** (이 저장소는 정우 저장소를 건드리지 않습니다):
+- **Guard 옵션 (2번):** 실행마다 Final Guard를 하나 띄워 Claude Code와 `api_capture.py` 프록시 사이에 둡니다.
+  - Claude Code의 `ANTHROPIC_BASE_URL`은 Guard로, Guard의 `PG_UPSTREAM_BASE_URL`은 캡처 프록시로 둡니다. 그래야 캡처에 Guard를 통과한 요청만 남습니다.
+  - Guard는 자기 탐지기 worker를 따로 씁니다(`PG_GUARD_DETECTOR_URL`). `PG_GUARD_COUNT_TOKENS`도 Guard 프로세스에 넘깁니다.
+  - gold 조건 비교(1번)에서는 이 옵션을 끕니다.
+- **시스템 프롬프트 가리기 (3번):** `--append-system-prompt`(또는 `--system-prompt`, `-file` 형태)를 넘기기 전에 위 명령으로 가린 인자로 바꿉니다. 시드를 썼으면 `PG_MOD_SEED_FILE`을 Claude Code 환경에 넣습니다. 탐지기 URL은 Mod가 쓰는 것과 같은 worker면 됩니다.
+- **기록:** 실행별 `run_meta`에 Guard 사용 여부, `PG_GUARD_COUNT_TOKENS` 값, 시스템 프롬프트를 가렸는지를 남겨야 결과를 나눠 볼 수 있습니다.
+- **대안:** 하네스가 `claude` 대신 `promptguard run -- <인자>`로 띄우면 Guard와 시스템 프롬프트 가리기가 함께 됩니다. 다만 이때는 gold 조건과 실제 탐지기가 섞이므로 2·3번에만 씁니다.
 
 ## 검증 결과
 

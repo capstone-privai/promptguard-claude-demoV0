@@ -17,6 +17,9 @@ def confidence_value(candidate: Any) -> str:
     return str(value or "moderate")
 
 
+# Rules whose value is base64 that CredSweeper reports without its trailing = padding.
+PADDED_RULES = {"BASE64 encoded PEM Private Key", "BASE64 Private Key"}
+
 class CredSweeperAdapter(DetectorAdapter):
     version = CREDSWEEPER_VERSION
 
@@ -64,6 +67,11 @@ class CredSweeperAdapter(DetectorAdapter):
                     continue
                 cp_start = starts[line_index] + value_start
                 cp_end = starts[line_index] + value_end
+                # CredSweeper ends a base64 PEM / private key span before its = padding; the padding belongs to it.
+                if str(candidate.rule_name) in PADDED_RULES:
+                    for _ in range(2):
+                        if cp_end < len(text) and text[cp_end] == "=":
+                            cp_end += 1
                 inferred_variable = assigned_variable(text, starts[line_index], cp_start)
                 if variable in BENIGN_VARIABLES or inferred_variable in BENIGN_VARIABLES:
                     continue

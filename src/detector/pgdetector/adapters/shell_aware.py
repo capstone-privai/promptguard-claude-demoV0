@@ -29,6 +29,7 @@ source/sink semantics, and never logs or retains candidate values.
 from __future__ import annotations
 
 import bisect
+import os
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -66,9 +67,11 @@ STDIN_PASSTHROUGH = {"cat", "echo", "printf"}
 
 EXPECT_CUE = re.compile(r"(?i)pass|assword|token|secret|\bpin\b")
 EXPECT_CALL = re.compile(r"(?i)(?:\bexpect\b|\.expect(?:_exact)?\s*\()")
-SEND_CALL = re.compile(r"(?i)\b(?:send|sendline)\s*(?:\(\s*)?[bBrRuUfF]?(?P<quote>['\"])(?P<value>.*?)(?P=quote)")
+# A quoted literal runs to its real closing quote: \" \' and \\ inside do not end it.
+QUOTED_VALUE = r"(?P<quote>['\"])(?P<value>(?:\\.|(?!(?P=quote))[^\\])*)(?P=quote)"
+SEND_CALL = re.compile(rf"(?i)\b(?:send|sendline)\s*(?:\(\s*)?[bBrRuUfF]?{QUOTED_VALUE}")
 FUNCTION_CALL = re.compile(r"(?s)\b(?P<name>[A-Za-z_][A-Za-z0-9_.]*)\s*\((?P<args>[^\r\n()]*)\)")
-STRING_LITERAL = re.compile(r"[bBrRuUfF]?(?P<quote>['\"])(?P<value>.*?)(?P=quote)")
+STRING_LITERAL = re.compile(rf"[bBrRuUfF]?{QUOTED_VALUE}")
 KEYWORD_ARG = re.compile(r"^\s*(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*[=:]\s*")
 STRONG_FUNCTION_WORDS = {"password", "passwd", "passphrase", "credential", "credentials", "secret", "token"}
 AMBIGUOUS_FUNCTION_WORDS = {"login", "authenticate", "auth"}
@@ -292,10 +295,15 @@ def split_identifier(name: str) -> set[str]:
 
 def split_args(args: str) -> list[str]:
     parts, current, quote = [], [], ""
+    escaped = False
     for char in args:
         if quote:
             current.append(char)
-            if char == quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
                 quote = ""
         elif char in "'\"":
             quote = char
@@ -315,6 +323,15 @@ class ShellAwareAdapter(DetectorAdapter):
     def __init__(self, name: str, options: Mapping[str, Any], config_dir: Path) -> None:
         super().__init__(name, options, config_dir)
         self.min_value_length = max(1, int(options.get("min_value_length", 1)))
+        # PG_SHELL_POSITIONAL_MIN (default 1, today's behaviour): a positional literal that only a credential-named
+        # function makes a candidate must be at least this long; 4 is CredSweeper's minimum. On the CredData-
+        # trajectory test, CreateOrUpdateEnvSecret(ctx, 1, "e", input) gave "e", which the Native Mod then
+        # re-masked inside every hex key. Keyword arguments and the command-flag rules keep min_value_length.
+        try:
+            positional_min = int(os.environ.get("PG_SHELL_POSITIONAL_MIN") or 1)
+        except ValueError:
+            positional_min = 1
+        self.positional_min = positional_min if positional_min >= 1 else 1
 
     def scan(self, text: str) -> list[RawFinding]:
         output: list[RawFinding] = []
@@ -557,7 +574,7 @@ class ShellAwareAdapter(DetectorAdapter):
             # A credential-named keyword argument is evidence on its own; a
             # positional literal needs a credential-meaning function name.
             chosen = [(item, "strong") for item in keyword_hits]
-            if not chosen and cue_name and positional:
+            if not chosen and cue_name and positional and len(positional[-1][1]) >= self.positional_min:
                 chosen = [(positional[-1], "strong" if strong_name else "ambiguous")]
             for (start, value), strength in chosen:
                 if not plausible(value):
