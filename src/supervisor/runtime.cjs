@@ -7,6 +7,7 @@ const { spawn, spawnSync } = require('child_process')
 const { ManagedProcess, delay, stopProcessTree } = require('./process.cjs')
 const { getJson, waitForJson } = require('./http.cjs')
 const { StateStore } = require('./state.cjs')
+const { detectorScan, maskSystemPromptArgs } = require('../launcher/system-prompt.cjs')
 
 const LOG_RANK = Object.freeze({ error: 0, warn: 1, info: 2, debug: 3 })
 const SENSITIVE_SERVICE_ENV = Object.freeze([
@@ -344,9 +345,20 @@ class RuntimeSupervisor {
     environment.PG_RUNTIME_ACTIVE = '1'
     addNoProxy(environment)
 
+    // No Mod hook sees --append-system-prompt / --system-prompt (or their -file forms), so they are masked here
+    // and the Mod gets their placeholders from the seed file (src/launcher/system-prompt.cjs). Fail-closed.
+    const seedFile = path.join(this.runtimeDirectory, 'system-prompt-seed.json')
+    fs.rmSync(seedFile, { force: true })
+    const masked = await maskSystemPromptArgs(this.claudeArgs, {
+      scan: detectorScan(this.config.modDetectorUrl, Math.max(this.config.detectorTimeoutMs, 30000)),
+      seedFile,
+      workDir: this.runtimeDirectory,
+    })
+    if (masked.seeded) environment.PG_MOD_SEED_FILE = seedFile
+
     // Pre-allow the Mod's detector tool: a denied permission prompt would make every scan fail, and
     // the Mod would then block all text. --allowedTools takes a list, so another option follows it.
-    const args = ['--allowedTools', 'mcp__pgdetector__scan_batch', '--plugin-dir', paths.plugin, '--mcp-config', paths.mcpConfig, ...this.claudeArgs]
+    const args = ['--allowedTools', 'mcp__pgdetector__scan_batch', '--plugin-dir', paths.plugin, '--mcp-config', paths.mcpConfig, ...masked.args]
     const child = spawn(this.config.claudeBinary, args, {
       cwd: process.cwd(),
       env: environment,
