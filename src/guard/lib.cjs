@@ -6,6 +6,7 @@ const crypto = require('node:crypto')
 const path = require('node:path')
 
 const DEFAULT_MAX_BODY = 8 * 1024 * 1024
+const FILTER_SETTINGS = new Set(['PG_DETECTOR_FILTERS', 'PG_DETECTOR_FILTER_DUMMY'])
 const DEFAULT_DETECTOR_TIMEOUT = 5_000
 const DEFAULT_UPSTREAM_TIMEOUT = 120_000
 const DEFAULT_BODY_TIMEOUT = 15_000
@@ -123,6 +124,10 @@ function loadConfig(env = process.env) {
     ),
     auditPath: env.PG_AUDIT_PATH || auditDefault,
     sessionHash: parseSessionHash(env.PG_SESSION_HASH),
+    // Set by the supervisor when the Native Mod's and this Guard's detector workers report different
+    // PG_DETECTOR_FILTERS / PG_DETECTOR_FILTER_DUMMY settings: the names that differ, never values.
+    filterMismatch: Object.freeze(String(env.PG_DETECTOR_FILTER_MISMATCH || '').split(',')
+      .map(name => name.trim()).filter(name => FILTER_SETTINGS.has(name))),
   })
 }
 

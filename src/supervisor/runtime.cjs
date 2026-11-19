@@ -7,6 +7,7 @@ const { spawn, spawnSync } = require('child_process')
 const { ManagedProcess, delay, stopProcessTree } = require('./process.cjs')
 const { getJson, waitForJson } = require('./http.cjs')
 const { StateStore } = require('./state.cjs')
+const { filterSettingsMismatch } = require('./filter-settings.cjs')
 
 const LOG_RANK = Object.freeze({ error: 0, warn: 1, info: 2, debug: 3 })
 const SENSITIVE_SERVICE_ENV = Object.freeze([
@@ -267,6 +268,7 @@ class RuntimeSupervisor {
       isAlive: () => service.isAlive(),
     })
     updateDetectorMetrics(service, value)
+    service.readyValue = value
     service.markReady()
   }
 
@@ -379,6 +381,18 @@ class RuntimeSupervisor {
     })
   }
 
+  // Both detector workers must run the same PG_DETECTOR_FILTERS / PG_DETECTOR_FILTER_DUMMY. A difference is named
+  // (no values) at startup and handed to the Final Guard, whose blocks then say "필터 설정 불일치".
+  checkFilterSettings() {
+    const mismatch = filterSettingsMismatch(this.service('transformDetector').readyValue, this.service('verificationDetector').readyValue)
+    const guard = this.service('finalGuard')
+    guard.env = { ...guard.env, PG_DETECTOR_FILTER_MISMATCH: mismatch.join(',') }
+    if (mismatch.length) {
+      this.log('warn', `Warning: detector filter settings differ between the Transform and Verification detectors (${mismatch.join(', ')}). Give both the same values; until then the Final Guard may block text the Native Mod let through.`)
+    }
+    return mismatch
+  }
+
   async start() {
     this.state.assertNotRunning()
     this.preflight()
@@ -394,6 +408,7 @@ class RuntimeSupervisor {
       console.log('✓ Transform detector ready')
       await this.startServiceWithRecovery(this.service('verificationDetector'))
       console.log('✓ Verification detector ready')
+      this.checkFilterSettings()
       await this.startServiceWithRecovery(this.service('finalGuard'))
       this.guardReady = true
       console.log('✓ Final Guard ready')
