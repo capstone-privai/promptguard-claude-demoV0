@@ -13,7 +13,7 @@ function usage() {
 
 Usage:
   promptguard run [--config FILE] [--runtime-dir DIR] [--no-claude]
-                  [--enable NAMES] [--disable NAMES] [--policy union|majority]
+                  [--enable NAMES] [--disable NAMES] [--policy union|majority|verifier]
                   [--ml-scope cue|full] [--detector-timeout-ms N] [--readiness-timeout-ms N]
                   [-- CLAUDE_ARGS...]
   promptguard status [--config FILE] [--runtime-dir DIR] [--json]
@@ -32,8 +32,12 @@ Options:
 Detector options (run):
   --enable NAMES             Turn detectors on, comma-separated (e.g. ml-span,ml-qwen).
   --disable NAMES            Turn detectors off; wins over --enable.
-  --policy union|majority    union: any detector's span is masked (default in detector.json).
+  --policy union|majority|verifier
+                             union: any detector's span is masked (default in detector.json).
                              majority: the original vote of the non-candidate-only detectors.
+                             verifier: strong candidates are masked, ambiguous ones only when the
+                             back-end verifier model (detector.json "verifier", PG_VERIFIER_BUNDLE)
+                             accepts them. Readiness defaults to 180000 ms.
   --ml-scope cue|full        How much text ml-span and ml-v9 read.
                              cue: the whole text up to 2000 characters, then only lines near a credential word.
                              full: the whole text up to 20000 characters, then as cue. Slower: the model
@@ -49,6 +53,7 @@ Examples:
   promptguard run --enable ml-span
   promptguard run --enable ml-qwen --disable shell-aware
   promptguard run --policy majority
+  promptguard run --policy verifier
   promptguard run --enable ml-span --ml-scope full
 `)
 }

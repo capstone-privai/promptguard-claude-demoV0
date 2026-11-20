@@ -84,3 +84,32 @@ cd sample-protected-project
 - PromptGuard는 detector worker를 두 개(Native Mod용, Final Guard용) 띄운다. 모델도 두 번 로드돼 메모리가 두 배 든다. Qwen(float32)은 worker당 약 2GB다.
 - Qwen의 `gate: cue`는 속도를 위한 선택이다. cue 단어가 없는 텍스트의 키는 Qwen이 보지 않는다(다른 모듈은 여전히 검사한다).
 - 테스트(`tests/detector/test_span_models.py`)는 가짜 모델로 adapter 동작만 검증한다. 실제 가중치로 돌린 결과가 아니다.
+
+## 뒷단 검증기 (`--policy verifier`)
+
+탐지기는 후보마다 strong/ambiguous를 붙인다. `candidate_policy: "verifier"`는 민준 저장소의 검증기 계획(`docs/ml_span/VERIFIER_PLAN.md`)의 "strong + 검증기" 정책이다.
+
+- 후보의 strength는 `majority`와 같다. 다수결이 남긴 span 안에 있거나 어떤 규칙이 강한 근거를 냈으면 strong, 아니면 ambiguous다.
+- strong 후보는 가린다. ambiguous 후보는 검증기의 P(MASK)가 기준값 이상일 때만 가린다. 나머지 ambiguous 후보는 가리지 않는다.
+- 검증기는 `privai_model.verifier.runtime.CandidateVerifier`다. 로컬용 mmBERT 후보 분류기와 서버용 Qwen LoRA 검증기 번들을 모두 읽는다. 모델은 학습 때와 같은 코드(`verifier.candidates.candidate_records`)로 만든 입력을 받는다.
+- 기준값은 번들에 들어 있다(validation에서 recall 0.99로 고정). `recall_target`으로 번들에 있는 다른 값(예: 0.95)을 고를 수 있다.
+- **fail-closed:** 검증기 오류, 점수 개수나 범위 이상, timeout이면 그 텍스트의 후보를 전부 가리고 `ADAPTER_FAILURE:verifier`를 낸다. Native Mod와 Final Guard는 요청을 막는다.
+- 후보에는 `verifier_score`(숫자)만 붙는다. 원문은 남기지 않는다.
+
+```powershell
+..\promptguard.cmd run --policy verifier
+```
+
+| 옵션 (`detector.json`의 `verifier`) | 기본값 | 뜻 |
+|---|---|---|
+| `repository` | `../../../promptguard-model` | 민준 저장소 경로 |
+| `bundle` | `runs/verifier/creddata-mmbert-small/model` | 검증기 번들 폴더(저장소 기준). `PG_VERIFIER_BUNDLE`이 우선한다. 가중치는 저장소에 커밋되지 않으므로 학습한 PC에서 이 경로로 옮겨 둔다 |
+| `device` | `cpu` | `cpu`, `mps`, `cuda`, `auto` |
+| `recall_target` | `null` | `null`이면 번들의 배포 기준(0.99) |
+| `context_lines` | 3 | 후보 앞뒤로 모델에 주는 줄 수. 학습 때와 같아야 한다 |
+| `timeout_seconds` | 4 | 넘기면 fail-closed. `PG_ML_TIMEOUT_SECONDS`가 우선한다 |
+
+- `--policy verifier`를 골랐는데 번들이 없거나 불러오지 못하면 PromptGuard가 시작하지 않는다. 기본 정책(`union`)에서는 검증기를 불러오지 않는다.
+- worker 준비 대기 시간은 180초가 된다(`--readiness-timeout-ms`로 바꿀 수 있다).
+- 학습 데이터의 channel은 CredData-trajectory 행의 source다. 실행 중에는 탐지기가 받은 scan source가 그 자리에 들어간다. 두 값의 어휘가 다르면 모델이 학습 때 못 본 입력을 받는다.
+- 테스트(`tests/detector/test_verifier.py`)는 가짜 모델로 정책과 fail-closed 동작만 검증한다. 실제 검증기로 탐지기를 돌린 결과는 validation 정책 비교(F2 0.784, mmBERT-small)와 맞는지 따로 확인해야 한다.

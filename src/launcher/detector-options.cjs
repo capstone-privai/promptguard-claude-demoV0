@@ -8,7 +8,7 @@ const fs = require('fs')
 const path = require('path')
 
 const DEFAULT_DETECTOR_CONFIG = path.resolve(__dirname, '..', 'detector', 'detector.json')
-const POLICIES = new Set(['union', 'majority'])
+const POLICIES = new Set(['union', 'majority', 'verifier'])
 const ML_ADAPTERS = new Set(['ml-span', 'ml-v9', 'ml-qwen'])
 const ML_READINESS_MS = 180000
 const QWEN_DETECTOR_TIMEOUT_MS = 30000
@@ -40,7 +40,7 @@ function detectorEnvironment(options, env = process.env) {
   if (unknown.length) {
     throw new Error(`Unknown detector name(s): ${unknown.join(', ')}. Known: ${[...valid].join(', ')}.`)
   }
-  if (options.policy && !POLICIES.has(options.policy)) throw new Error('--policy must be union or majority.')
+  if (options.policy && !POLICIES.has(options.policy)) throw new Error('--policy must be union, majority or verifier.')
   const scope = options.mlScope ?? env.PG_ML_SCOPE
   if (scope && !ML_SCOPES.has(scope)) throw new Error('--ml-scope must be cue or full.')
 
@@ -60,15 +60,16 @@ function detectorEnvironment(options, env = process.env) {
   const scoped = active.some(name => SCOPE_MODELS.has(name))
   if (options.mlScope && !scoped) throw new Error('--ml-scope needs ml-span or ml-v9 to be on (for example --enable ml-span).')
 
-  // Model adapters load slowly and Qwen scans take seconds: raise the waits
-  // unless the user (option or environment) already chose them.
-  if (active.some(name => ML_ADAPTERS.has(name)) && out.PG_READINESS_TIMEOUT_MS === undefined && !env.PG_READINESS_TIMEOUT_MS) {
+  // Model adapters and the verifier model load slowly and Qwen scans take seconds:
+  // raise the waits unless the user (option or environment) already chose them.
+  const policy = out.PG_DETECTOR_CANDIDATE_POLICY || env.PG_DETECTOR_CANDIDATE_POLICY || 'config default'
+  const model = active.some(name => ML_ADAPTERS.has(name)) || policy === 'verifier'
+  if (model && out.PG_READINESS_TIMEOUT_MS === undefined && !env.PG_READINESS_TIMEOUT_MS) {
     out.PG_READINESS_TIMEOUT_MS = String(ML_READINESS_MS)
   }
   if ((active.includes('ml-qwen') || (scoped && scope === 'full')) && out.PG_DETECTOR_TIMEOUT_MS === undefined && !env.PG_DETECTOR_TIMEOUT_MS) {
     out.PG_DETECTOR_TIMEOUT_MS = String(QWEN_DETECTOR_TIMEOUT_MS)
   }
-  const policy = out.PG_DETECTOR_CANDIDATE_POLICY || env.PG_DETECTOR_CANDIDATE_POLICY || 'config default'
   const scopeNote = scoped ? `, ML scope: ${scope || 'config default'}` : ''
   return { env: out, active, summary: `Detectors: ${active.join(', ')} (policy: ${policy}${scopeNote})` }
 }
