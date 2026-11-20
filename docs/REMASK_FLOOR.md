@@ -12,12 +12,12 @@
 
 ## 설정
 
-두 설정 모두 기본값은 지금 동작이다. 정우의 측정 뒤에 기본값을 정한다.
+release/defaults-1120부터 두 설정 모두 새 기본값을 쓴다(정우 측정: 재마스킹 오탐 −91%, 새로 놓친 정답 0). 이전 동작은 `PG_SHELL_POSITIONAL_MIN=1`, `PG_REMASK_SHORT=substring`이다.
 
-| 설정 | 기본 | 바꾸면 |
+| 설정 | 기본 | 값별 동작 |
 |---|---|---|
-| `PG_SHELL_POSITIONAL_MIN` | `1` | shell-aware `function_argument`가 함수 이름 단서만으로 잡는 위치 인자 리터럴은 이 길이 미만이면 내지 않는다. `4`가 CredSweeper와 같은 기준이다. 정수가 아니거나 1보다 작으면 1로 본다 |
-| `PG_REMASK_SHORT` | `substring` | `boundary`: 8자 미만 값은 앞뒤 글자가 `[A-Za-z0-9_]`가 아닐 때만 다시 가린다. 8자 이상은 지금처럼 부분 문자열로 가린다 |
+| `PG_SHELL_POSITIONAL_MIN` | `4` | shell-aware `function_argument`가 함수 이름 단서만으로 잡는 위치 인자 리터럴은 이 길이 미만이면 내지 않는다. `4`가 CredSweeper와 같은 기준이다. 빈 값은 기본값(4), 정수가 아니거나 1보다 작으면 1로 본다 |
+| `PG_REMASK_SHORT` | `boundary` | `boundary`: 8자 미만 값은 앞뒤 글자가 `[A-Za-z0-9_]`가 아닐 때만 다시 가린다. 8자 이상은 부분 문자열로 가린다. `substring`(또는 그 밖의 값): 모든 값을 부분 문자열로 가린다(이전 동작) |
 
 ### `PG_SHELL_POSITIONAL_MIN`이 바꾸는 범위 (shell-aware 규칙별)
 

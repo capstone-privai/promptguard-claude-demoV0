@@ -11,8 +11,34 @@ let prefixTable = null
 const PREFIX_TABLE = '../../docs/PLACEHOLDER_PUBLIC_PREFIXES.md'
 // A shorter rest is too little to hide once the prefix is shown, so such a value is masked whole.
 const PUBLIC_PREFIX_MIN_REST = 16
-// PG_REMASK_SHORT: "substring" (default, today's behaviour) or "boundary". Read once per session in sanitize.
+// The Native Mod's settings and their defaults (release/defaults-1120). An unset or empty variable takes the default;
+// an on/off setting is on only for "on". The detector's own settings and defaults are in
+// src/detector/pgdetector/settings.py; tests/launcher/defaults.test.cjs checks both against one table.
+const DEFAULTS = Object.freeze({
+  // off: no re-masking at all (remaskText and remaskPartial); the vault still fills, so restores keep working. For
+  // measurement only: a restored value printed back then goes out as it is unless the detector finds it.
+  PG_REMASK: 'on',
+  // "boundary" or "substring" (the behaviour before release/defaults-1120).
+  PG_REMASK_SHORT: 'boundary',
+  PG_PLACEHOLDER_GUIDE: 'on',
+  PG_RESTORE_ESCAPED: 'on',
+  PG_PLACEHOLDER_PUBLIC_PREFIX: 'off',
+})
+
+// The value of setting `name`, given what the environment holds for it. Each caller reads the variable itself, by
+// its literal name: the engine refuses the whole module when the name is a variable (Claude Code 2.1.291).
+function setting(name, raw) {
+  return raw === undefined || raw === null || String(raw).trim() === '' ? DEFAULTS[name] : String(raw).trim()
+}
+
+// Read once per session (loadSettings, from sanitize and tool.call).
 let remaskShort = null
+let remaskOn = null
+
+async function loadSettings($) {
+  if (remaskShort === null) remaskShort = setting('PG_REMASK_SHORT', await $.env.get('PG_REMASK_SHORT')) === 'boundary' ? 'boundary' : 'substring'
+  if (remaskOn === null) remaskOn = setting('PG_REMASK', await $.env.get('PG_REMASK')) === 'on'
+}
 // boundary: a known value shorter than this is re-masked only where it stands as a word.
 const SHORT_REMASK = 8
 const WORD_CHAR = '[A-Za-z0-9_]'
@@ -65,7 +91,7 @@ function placeholder(finding, raw) {
 async function loadPrefixTable($) {
   if (prefixTable) return
   prefixTable = []
-  if (await $.env.get('PG_PLACEHOLDER_PUBLIC_PREFIX') !== 'on') return
+  if (setting('PG_PLACEHOLDER_PUBLIC_PREFIX', await $.env.get('PG_PLACEHOLDER_PUBLIC_PREFIX')) !== 'on') return
   try {
     const rows = String(await $.fs.read(`${$.plugin.root}/${PREFIX_TABLE}`)).split(/\r?\n/)
     prefixTable = rows.flatMap(row => {
@@ -109,7 +135,7 @@ function restoreText(text, counter) {
 
 function restoreToolInput(e, escaped = false) {
   const counter = { count: 0 }
-  // PG_RESTORE_ESCAPED=on: a regex-escaped placeholder in a regex argument first (metric-task t14 wrote
+  // PG_RESTORE_ESCAPED (default on): a regex-escaped placeholder in a regex argument first (metric-task t14 wrote
   // \[TOKEN_1\] in a Grep pattern and got no match), then the plain form everywhere as before.
   let source = e
   if (escaped && e.tool === 'Grep' && typeof e.pattern === 'string') source = { ...e, pattern: restoreEscapedPattern(e.pattern, 'ere', counter) }
@@ -235,7 +261,7 @@ async function loadSeed($) {
   if (entries.length) await $.fs.write(path, '{"entries":[]}\n')
 }
 
-// PG_PLACEHOLDER_GUIDE=on: one section at the end of every composed system prompt. In metric-task (161 tasks) a
+// PG_PLACEHOLDER_GUIDE (default on): one section at the end of every composed system prompt. In metric-task (161 tasks) a
 // model stopped on a key that arrived as [SECRET_1] (g29), "fixed" a password bug it could not see (t12), and ten
 // successful runs told the user the file held a fake string. The tool list is RESTORE_TOOLS itself, so the guide
 // never promises a restore the Mod does not make. No placeholder-shaped example (digits), so nothing restores it.
@@ -256,13 +282,15 @@ function placeholderGuide(escaped) {
 // Replaces known raw values with their placeholders, even where the detector would miss them
 // (e.g. a restored password echoed alone on a line). Longest first so substrings never win.
 //
-// With PG_REMASK_SHORT=boundary a value shorter than SHORT_REMASK characters is replaced only where no
+// With PG_REMASK_SHORT=boundary (the default) a value shorter than SHORT_REMASK characters is replaced only where no
 // [A-Za-z0-9_] stands right before or after it. A short value found once (shell-aware's "e" in
 // CreateOrUpdateEnvSecret(ctx, 1, "e", input), CredData-trajectory test) was otherwise masked inside every word
 // and hex key that contains it. Any other character, Hangul included, is a boundary: "비밀번호는mgb입니다" still
 // masks mgb. Longer values and remaskPartial are unchanged.
+//
+// PG_REMASK=off returns the text as it is, partial pass included, and counts nothing (remasked_count 0).
 function remaskText(text, counter) {
-  if (!reverseVault.size) return text
+  if (remaskOn === false || !reverseVault.size) return text
   let out = text
   for (const raw of [...reverseVault.keys()].sort((a, b) => b.length - a.length)) {
     if (!out.includes(raw)) continue
@@ -478,7 +506,7 @@ function rebuild(value, byId, cursor = { value: 0 }) {
 }
 
 async function sanitize($, value, source, signal) {
-  if (remaskShort === null) remaskShort = await $.env.get('PG_REMASK_SHORT') === 'boundary' ? 'boundary' : 'substring'
+  await loadSettings($)
   await loadSeed($)
   await loadPrefixTable($)
   const entries = collectStrings(value, source)
@@ -647,8 +675,8 @@ export function register(on) {
     const sections = []
     for (const section of result.sections) sections.push({ ...section, text: await sanitizeAndAudit($, section.text, 'automatic_context', { signal: next.signal, hook: 'prompt.compose' }) })
     // After sanitizing: the guide is PromptGuard's own text, never sent to the detector or masked.
-    if (await $.env.get('PG_PLACEHOLDER_GUIDE') === 'on') {
-      sections.push({ id: 'promptguard:placeholder-guide', text: placeholderGuide(await $.env.get('PG_RESTORE_ESCAPED') === 'on'), scope: 'session' })
+    if (setting('PG_PLACEHOLDER_GUIDE', await $.env.get('PG_PLACEHOLDER_GUIDE')) === 'on') {
+      sections.push({ id: 'promptguard:placeholder-guide', text: placeholderGuide(setting('PG_RESTORE_ESCAPED', await $.env.get('PG_RESTORE_ESCAPED')) === 'on'), scope: 'session' })
     }
     return { ...result, sections }
   }).catch(catchPromptCompose)
@@ -660,8 +688,9 @@ export function register(on) {
   on('tool.call', async ($, e, next) => {
     if (e.tool === 'mcp__pgdetector__scan_batch') return next(e)
     const operation = ++toolOperation
+    await loadSettings($)
     const restoreEnabled = RESTORE_TOOLS.has(e.tool) && await $.env.get('PG_RESTORE_PLACEHOLDERS') !== 'off'
-    const escaped = restoreEnabled && await $.env.get('PG_RESTORE_ESCAPED') === 'on'
+    const escaped = restoreEnabled && setting('PG_RESTORE_ESCAPED', await $.env.get('PG_RESTORE_ESCAPED')) === 'on'
     const { input, restoredCount } = restoreEnabled ? restoreToolInput(e, escaped) : { input: e, restoredCount: 0 }
     const lifecycle = { findingCount: null, types: {}, latencyMs: 0, findings: [] }
     const extra = { hook: 'tool.call', tool: e.tool, operation, restored_count: restoredCount }

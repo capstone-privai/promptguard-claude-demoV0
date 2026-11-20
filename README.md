@@ -145,28 +145,36 @@ Claude Code에서 `!`로 직접 실행한 명령과 그 출력은 `prompt.submit
 
 원복을 끄려면 `PG_RESTORE_PLACEHOLDERS=off`를 지정합니다. re-mask는 그대로 동작합니다.
 
+> **`PG_REMASK=off`는 끄지 마세요.** 측정용 설정입니다. 끄면 전체 값 재마스킹과 부분 재마스킹(`_PART`)을 모두 하지 않습니다. 자리표시자 복원은 그대로 되므로, 복원한 값이 실행 결과에 다시 나오면 탐지기가 그 자리에서 잡지 못하는 한 **원래 값이 그대로 모델에 갑니다.** audit의 `remasked_count`는 0이 됩니다.
+
 `PG_PLACEHOLDER_PUBLIC_PREFIX=on`이면 공개된 접두어가 있는 값을 `sk_live_[STRIPE_SECRET_KEY_1]`처럼 접두어를 남겨 가립니다. 기본은 꺼짐이고, 적용 대상은 [접두어 표](docs/PLACEHOLDER_PUBLIC_PREFIXES.md)에 있습니다.
 
-`PG_DETECTOR_FILTERS=on`이면 탐지기가 구조상 비밀일 수 없는 값(HTML 조각, 코드 호출, CSS 값, 템플릿, `secret-assignment`의 참조·코드 값)을 합집합 전에 거릅니다. `PG_DETECTOR_FILTER_DUMMY=on`은 예시·더미 값을 따로 거릅니다. 둘 다 기본은 꺼짐이고, 기준은 [탐지기 거르기](docs/DETECTOR_FILTERS.md)에 있습니다.
+탐지기 거르기(`PG_DETECTOR_FILTERS`)는 기본으로 켜져 있습니다. 구조상 비밀일 수 없는 값(HTML 조각, 코드 호출, CSS 값, 템플릿, `secret-assignment`의 참조·코드 값)을 합집합 전에 거릅니다. `PG_DETECTOR_FILTER_DUMMY=on`은 예시·더미 값을 따로 거르며 기본은 꺼짐입니다. 기준은 [탐지기 거르기](docs/DETECTOR_FILTERS.md)에 있습니다.
 
-`PG_REMASK_SHORT=boundary`이면 8자 미만 값은 단어 경계가 맞는 곳에서만 다시 가리고, `PG_SHELL_POSITIONAL_MIN=4`이면 shell-aware가 함수 이름 단서로 잡는 4자 미만 위치 인자를 내지 않습니다. 기본값은 지금 동작(`substring`, `1`)이고, 기준은 [짧은 값 재마스킹](docs/REMASK_FLOOR.md)에 있습니다.
+8자 미만 값은 기본으로 단어 경계가 맞는 곳에서만 다시 가리고(`PG_REMASK_SHORT=boundary`), shell-aware는 함수 이름 단서로 잡는 4자 미만 위치 인자를 내지 않습니다(`PG_SHELL_POSITIONAL_MIN=4`). 이전 동작은 `substring`과 `1`입니다. 기준은 [짧은 값 재마스킹](docs/REMASK_FLOOR.md)에 있습니다.
 
-`PG_PLACEHOLDER_GUIDE=on`이면 시스템 프롬프트에 자리표시자 안내를 한 번 넣고, `PG_RESTORE_ESCAPED=on`이면 Grep 패턴과 Bash의 grep·rg·sed 인자에서 `\[TYPE_N\]`도 복원합니다. 둘 다 기본은 꺼짐입니다. `promptguard run`은 `--append-system-prompt`·`--system-prompt`(와 `-file` 형태)의 비밀을 Claude Code를 띄우기 전에 가립니다. 내용과 count_tokens 빈틈은 [자리표시자 안내와 빈틈](docs/PLACEHOLDER_GUIDE_AND_GAPS.md)에 있습니다.
+시스템 프롬프트의 자리표시자 안내(`PG_PLACEHOLDER_GUIDE`)와 Grep 패턴·Bash의 grep·rg·sed 인자의 `\[TYPE_N\]` 복원(`PG_RESTORE_ESCAPED`)도 기본으로 켜져 있습니다. `promptguard run`은 `--append-system-prompt`·`--system-prompt`(와 `-file` 형태)의 비밀을 Claude Code를 띄우기 전에 가립니다. 내용과 count_tokens 빈틈은 [자리표시자 안내와 빈틈](docs/PLACEHOLDER_GUIDE_AND_GAPS.md)에 있습니다.
 
-### 설정 한눈에 보기 (eval/integration-1118)
+### 설정 한눈에 보기 (release/defaults-1120)
 
-이 브랜치는 PR #23, #24, #25, #26을 합친 측정용 브랜치입니다. 모든 설정은 환경변수이고, 기본값이면 main과 같은 동작입니다(아래 "항상 켜진 변경"은 제외).
+PR #23~#27의 변경에 새 기본값을 더한 릴리스 브랜치입니다. 기본값은 정우 측정(노션 "측정 요청 (11-19)" v3)으로 정했습니다. 모든 설정은 환경변수이고, "이전 동작" 열의 값을 주면 그 설정만 #23~#26 이전으로 돌아갑니다. 빈 값은 기본값으로 봅니다. on/off 설정은 `on`일 때만 켜지므로 `off`(또는 그 밖의 값)는 끔입니다.
 
-| 설정 | 기본값 | 켰을 때 바뀌는 것 | 출처 |
-|---|---|---|---|
-| `PG_DETECTOR_FILTERS` | `off` | `on`: 탐지기가 합집합 전에 구조상 비밀일 수 없는 후보를 거릅니다(HTML 조각, 코드 호출·색인, CSS 값, 템플릿). `secret-assignment`는 참조·호출·코드·템플릿 값을 내지 않습니다. 고신뢰 규칙(`src/detector/high-confidence-rules.json`)은 거르지 않습니다. Mod와 Guard의 설정이 다르면 Guard의 차단 메시지가 알려 줍니다 | #23 |
-| `PG_DETECTOR_FILTER_DUMMY` | `off` | `on`: 예시·더미 값(`<password>`, `your_*_here`, `xxx`, `***`, `placeholder` 등)을 따로 거릅니다. 조회 호출 기본값이 이런 모양이어도 후보가 아닙니다. `changeme` 같은 약한 기본값은 거르지 않습니다 | #23 |
-| `PG_REMASK_SHORT` | `substring` | `boundary`: 8자 미만 값은 앞뒤에 `[A-Za-z0-9_]`가 붙지 않은 곳에서만 다시 가립니다 | #24 |
-| `PG_SHELL_POSITIONAL_MIN` | `1` | `4`: shell-aware가 함수 이름 단서로 잡는 위치 인자 중 4자 미만은 내지 않습니다 | #24 |
-| `PG_RULE_HEX_KEY` | `off` | `on`: 키 이름(`key`, `api_key`, `secret_key` 등) 옆 따옴표 안의 32~64자 16진수를 `hex-key`로 찾습니다. Go의 `Key: String("…")`도 포함합니다. hash·sha·commit 같은 이름은 뺍니다 | #26 |
-| `PG_PLACEHOLDER_GUIDE` | `off` | `on`: 시스템 프롬프트 끝에 자리표시자 안내(627자)를 요청마다 한 번 넣습니다 | #25 |
-| `PG_RESTORE_ESCAPED` | `off` | `on`: Grep의 `pattern`과 Bash의 grep·rg·sed 인자에서 `\[TYPE_N\]`을 같은 문법으로 이스케이프한 실제 값으로 복원합니다 | #25 |
-| `PG_GUARD_COUNT_TOKENS` | `block` | `mask`: Final Guard가 count_tokens 요청에 한해 422 대신 탐지한 값을 자리표시자로 바꿔 보냅니다. `/v1/messages`는 그대로 막습니다 | #25 |
+Mod와 Guard의 탐지기 worker는 같은 `pgdetector`(`src/detector/pgdetector/settings.py`)에서 기본값을 읽으므로, 아무것도 주지 않으면 필터 설정 불일치 경고가 나지 않습니다. 한쪽에만 값을 주면 지금처럼 경고합니다.
+
+| 설정 | 기본값 | 이전 동작 | 기본값일 때 하는 일 | 근거 | 출처 |
+|---|---|---|---|---|---|
+| `PG_DETECTOR_FILTERS` | `on` | `off` | 탐지기가 합집합 전에 구조상 비밀일 수 없는 후보를 거릅니다(HTML 조각, 코드 호출·색인, CSS 값, 템플릿). `secret-assignment`는 참조·호출·코드·템플릿 값을 내지 않습니다. 고신뢰 규칙(`src/detector/high-confidence-rules.json`)은 거르지 않습니다. Mod와 Guard의 설정이 다르면 Guard의 차단 메시지가 알려 줍니다 | 실제 트래픽 오탐 약 −30%, 새로 놓친 정답 0 | #23 |
+| `PG_DETECTOR_FILTER_DUMMY` | `off` | `off` | `on`이면 예시·더미 값(`<password>`, `your_*_here`, `xxx`, `***`, `placeholder` 등)을 따로 거릅니다. `changeme` 같은 약한 기본값은 거르지 않습니다 | 효과가 측정 오차 수준이라 그대로 | #23 |
+| `PG_REMASK` | `on` | `on` | 복원했던 값이 다시 나오면 전체·부분 재마스킹으로 가립니다. **`off`는 측정용입니다.** 끄면 탐지기가 잡지 못한 재등장은 원래 값 그대로 나갑니다. 복원은 그대로 됩니다 | 측정용 스위치(지표 1의 8번, 지표 2의 promptguard 조건) | 이 PR |
+| `PG_REMASK_SHORT` | `boundary` | `substring` | 8자 미만 값은 앞뒤에 `[A-Za-z0-9_]`가 붙지 않은 곳에서만 다시 가립니다 | 재마스킹 오탐 −91%, 새로 놓친 정답 0 | #24 |
+| `PG_SHELL_POSITIONAL_MIN` | `4` | `1` | shell-aware가 함수 이름 단서로 잡는 위치 인자 중 4자 미만은 내지 않습니다 | 위와 같은 묶음 | #24 |
+| `PG_RULE_HEX_KEY` | `on` | `off` | 키 이름(`key`, `api_key`, `secret_key` 등) 옆 따옴표 안의 32~64자 16진수를 `hex-key`로 찾습니다. Go의 `Key: String("…")`도 포함합니다. hash·sha·commit 같은 이름은 뺍니다 | recall +2.2%p, 실제 트래픽 오탐 증가 0 | #26 |
+| `PG_PLACEHOLDER_GUIDE` | `on` | `off` | 시스템 프롬프트 끝에 자리표시자 안내를 요청마다 한 번 넣습니다(`PG_RESTORE_ESCAPED`가 켜져 있으면 763자, 꺼져 있으면 627자) | 지표 2 멈춤 4→0, placeholder 잘못 보고 15→0 | #25 |
+| `PG_RESTORE_ESCAPED` | `on` | `off` | Grep의 `pattern`과 Bash의 grep·rg·sed 인자에서 `\[TYPE_N\]`을 같은 문법으로 이스케이프한 실제 값으로 복원합니다 | 위와 같은 묶음 | #25 |
+| `PG_GUARD_COUNT_TOKENS` | `block` | `block` | `mask`이면 Final Guard가 count_tokens 요청에 한해 422 대신 탐지한 값을 자리표시자로 바꿔 보냅니다. `/v1/messages`는 그대로 막습니다 | 빈틈 확인 측정 전이라 그대로 | #25 |
+| `PG_PLACEHOLDER_PUBLIC_PREFIX` | `off` | `off` | `on`이면 공개 접두어를 남겨 가립니다(`sk_live_[STRIPE_SECRET_KEY_1]`) | 측정 안 함이라 그대로 | #21 |
+
+기본값이 들어 있는 곳은 `src/detector/pgdetector/settings.py`(탐지기), `src/native-mod/hooks/register.mjs`의 `DEFAULTS`(Mod), `src/guard/lib.cjs`(Guard) 세 곳이고, `tests/launcher/defaults.test.cjs`가 이 표와 함께 맞춰 봅니다.
 
 **설정 없이 항상 켜진 변경**
 
@@ -314,11 +322,11 @@ class MyAdapter(DetectorAdapter):
 
 `detector.json`에 `{"name": "my-tool", "type": "my_package.my_module:MyAdapter"}`처럼 `module:Class` 경로로 등록하면 기본 adapter 목록을 고치지 않아도 됩니다(모듈은 `src/detector` 아래 또는 `PYTHONPATH`에 있어야 합니다). 자주 쓰는 adapter는 `pgdetector/adapters/__init__.py`의 `ADAPTER_TYPES`에 짧은 이름으로 추가할 수 있습니다. 같은 adapter 종류를 옵션만 바꿔 다른 이름으로 여러 번 등록해도 각각 1표로 셉니다.
 
-## 통합 측정 (eval/integration-1118)
+## 통합 측정 (eval/integration-1118, release/defaults-1120)
 
-### 탐지 지표: 7개 설정을 한 번에
+### 탐지 지표: 8개 설정을 한 번에
 
-`scripts/eval_integration/run.py`가 promptguard-data의 채점기(`creddata-trajectory-data` 브랜치: 덮은 recall, 글자 precision, F2, `per_finding.jsonl`)로 아래 7개 설정을 돌리고 `report.md` 한 장을 냅니다. promptguard-data는 읽기만 합니다.
+`scripts/eval_integration/run.py`가 promptguard-data의 채점기(`creddata-trajectory-data` 브랜치: 덮은 recall, 글자 precision, F2, `per_finding.jsonl`)로 아래 8개 설정을 돌리고 `report.md` 한 장을 냅니다. promptguard-data는 읽기만 합니다. 모든 설정은 실행마다 명시적으로 주므로, 이 브랜치의 새 기본값은 1~7번 결과를 바꾸지 않습니다.
 
 | 번호 | 설정 |
 |---|---|
@@ -329,10 +337,13 @@ class MyAdapter(DetectorAdapter):
 | 5 | 2 + `PG_REMASK_SHORT=boundary` + `PG_SHELL_POSITIONAL_MIN=4` |
 | 6 | 2 + `PG_RULE_HEX_KEY=on` |
 | 7 | 전부 on (`PG_PLACEHOLDER_GUIDE`, `PG_RESTORE_ESCAPED`, `PG_GUARD_COUNT_TOKENS`는 탐지 채점에 영향이 없지만 함께 켭니다) |
+| 8 | 새 기본값(release/defaults-1120) + `PG_REMASK=off`. 채점기의 Mod 재현(`ModSession`)에서 재마스킹만 뺍니다(`instrument.install_no_remask`) |
+
+2~7번은 `PG_REMASK=on`입니다(지금까지 늘 켜져 있던 동작).
 
 ```bash
 cd promptguard-data   # creddata-trajectory-data 브랜치
-PG=../promptguard-claude-demoV0   # eval/integration-1118
+PG=../promptguard-claude-demoV0   # release/defaults-1120
 python $PG/scripts/eval_integration/run.py --data-root . \
   --creddata metric-detection/data_test/sessions_from_CredData-trajectory.jsonl \
   --nine metric-detection/data_test/sessions.jsonl metric-detection/data_test/sessions_2.jsonl \
@@ -343,10 +354,12 @@ python $PG/scripts/eval_integration/run.py --data-root . \
   --out runs/eval-integration-1118 --jobs 2 --gitleaks ../tools/gitleaks-8.30.1
 ```
 
-- **돌리는 범위:** CredData-trajectory test는 7개 설정 모두, 기존 9셋은 1번과 7번만 돌립니다. 실제 트래픽(openhands-feedback, SWE-Gym)은 "1,000줄당 오탐" 열을 채우려고 7개 설정 모두 돌립니다.
+- **돌리는 범위:** CredData-trajectory test는 8개 설정 모두, 기존 9셋은 1·7·8번만 돌립니다. 실제 트래픽(openhands-feedback, SWE-Gym)은 "1,000줄당 오탐" 열을 채우려고 8개 설정 모두 돌립니다. 8번만 더하려면 `--configs 7-all 8-defaults-no-remask`로 돌리고 표는 `--report-only`로 다시 만듭니다(끝난 실행은 건너뜁니다).
 - **이어 돌리기:** 끝난 실행은 다시 돌리지 않습니다(`--force`로 다시). `--report-only`는 표만 다시 만듭니다.
-- **표의 열:** recall(덮었는가), 글자 precision, F2, 못 가린 span 수 / 고유 값 수, 재마스킹 오탐, 실제 트래픽 1,000줄당 오탐, 거르기별 걸러낸 수, 새로 놓친 정답 수.
-  - 새로 놓친 정답은 2번은 1번과, 3~7번은 2번과 비교합니다. 정답 유형, 기준 설정에서 찾은 규칙, 이 설정에서 그 위를 거른 거르기, 값 모양(종류·길이)별로 따로 표를 냅니다.
+- **표의 열:** recall(덮었는가), 글자 precision, F2, 못 가린 span 수 / 고유 값 수, 재마스킹 오탐, 실제 트래픽 1,000줄당 오탐, 거르기별 걸러낸 수, 새로 놓친 정답 수, 재마스킹으로만 가린 정답.
+  - 새로 놓친 정답은 2번은 1번과, 3~7번은 2번과, 8번은 7번과 비교합니다. 정답 유형, 기준 설정에서 찾은 규칙, 이 설정에서 그 위를 거른 거르기, 값 모양(종류·길이)별로 따로 표를 냅니다.
+  - **재마스킹으로만 가린 정답**(8번 줄): 7번에서는 덮었고 8번에서는 못 덮은 정답 span 수 / 고유 값 수입니다. 7번은 `PG_DETECTOR_FILTER_DUMMY`도 켜므로, 그 거르기 때문에 7번이 놓친 정답은 이 수에 들지 않습니다.
+- **7번의 재마스킹 오탐은 그 값을 처음 잡은 탐지기·규칙별로 나눕니다.** 재마스킹 오탐 수와 고유 값 수를 적고, 같은 세션에서 그 값을 처음(가장 앞 항목, 그 안에서 가장 앞 위치) 낸 후보의 `adapter:rule`별로 span 수와 고유 값 수를 냅니다. 같은 자리를 여러 규칙이 냈으면 함께 적고, 세션 안에 그 값을 낸 후보가 없으면 따로 셉니다.
 - **7번은 후보 등급별로도 나눕니다.**
   - 바로 가림: `src/detector/high-confidence-rules.json`의 규칙이거나 strong 등급인 후보
   - 애매함: 그 밖의 moderate·ambiguous 후보
@@ -358,7 +371,7 @@ python $PG/scripts/eval_integration/run.py --data-root . \
 
 정우 노션의 방법대로 `m2.py`로 돌립니다. `m2.py`는 셸의 환경변수를 Claude Code에 그대로 넘기므로, 설정은 환경변수로 줍니다. 측정 엔진은 Claude Code 2.1.319입니다.
 
-**1. gold 과제 × 3회: main 대비 GUIDE+RESTORE_ESCAPED on.** 이 비교에는 Final Guard를 앞에 두지 않습니다. Guard의 실제 탐지기가 gold 조건(정답으로 가리기)에 섞이기 때문입니다.
+**1. gold 과제 × 3회: main 대비 GUIDE+RESTORE_ESCAPED on.** 이 비교에는 Final Guard를 앞에 두지 않습니다. Guard의 실제 탐지기가 gold 조건(정답으로 가리기)에 섞이기 때문입니다. release/defaults-1120에서는 두 설정이 기본으로 켜져 있으므로 환경변수 없이 돌려도 같습니다.
 
 ```bash
 cd promptguard-data
@@ -366,13 +379,26 @@ PG=../promptguard-claude-demoV0
 TASKS="t12 t14 g29 s08 s11 s34 s35 s36 s70 n03 n14 n24 g23 t09 t10 t11 t15 t16 t17 s29 s30 s72 s73 s74 s75 s76 s77 s78 s79 s80"
 git -C $PG switch --detach 668c2c1
 python3 metric-task/scripts/m2.py run --tasks $TASKS --conditions gold --reps 3 --model sonnet --jobs 2 --system-root $PG --name integ_before
-git -C $PG switch eval/integration-1118
+git -C $PG switch release/defaults-1120
 PG_PLACEHOLDER_GUIDE=on PG_RESTORE_ESCAPED=on python3 metric-task/scripts/m2.py run --tasks $TASKS --conditions gold --reps 3 --model sonnet --jobs 2 --system-root $PG --name integ_after
 python3 metric-task/scripts/m2.py report runs/metric-task/integ_before --out metric-task/results/integ_before
 python3 metric-task/scripts/m2.py report runs/metric-task/integ_after --out metric-task/results/integ_after
 ```
 
 잴 것: 작업 성공률, 멈춤 비율, 자리표시자를 파일 내용으로 보고한 비율, 서버에 간 비밀 수(늘면 안 됨).
+
+**1b. promptguard 조건 (실제 탐지기): 새 기본값으로 `PG_REMASK=on`과 `off`.** 같은 과제 목록(`$TASKS`, gold와 같음) × 3회를 `--conditions promptguard`로 두 번 돌립니다. Mod가 실제 탐지기(`src/detector/worker.py`)를 쓰고, 설정은 새 기본값 그대로 둡니다(`PG_*`를 주지 않음). 재마스킹만 켜고 끕니다. Final Guard는 이 비교에도 두지 않습니다. 두면 Guard가 재마스킹이 놓친 값을 막아 off의 차이가 가려집니다.
+
+```bash
+git -C $PG switch release/defaults-1120
+for name in $(env | grep -o '^PG_[A-Z_]*'); do unset $name; done   # 셸에 남은 설정이 새 기본값을 덮지 않게
+PG_REMASK=on  python3 metric-task/scripts/m2.py run --tasks $TASKS --conditions promptguard --reps 3 --model sonnet --jobs 2 --system-root $PG --name pg_remask_on
+PG_REMASK=off python3 metric-task/scripts/m2.py run --tasks $TASKS --conditions promptguard --reps 3 --model sonnet --jobs 2 --system-root $PG --name pg_remask_off
+python3 metric-task/scripts/m2.py report runs/metric-task/pg_remask_on  --out metric-task/results/pg_remask_on
+python3 metric-task/scripts/m2.py report runs/metric-task/pg_remask_off --out metric-task/results/pg_remask_off
+```
+
+잴 것: 작업 성공률, 서버에 간 심은 비밀 수(`to_server`, 캡처 기준), 재마스킹 횟수(Mod audit의 `remasked_count` 합. off면 0이어야 합니다). `PG_REMASK=off`는 측정용입니다. off에서 서버에 간 비밀이 늘어난 만큼이 재마스킹이 막던 누출입니다.
 
 **2. 빈틈 확인 n19, n27 (count_tokens):** Final Guard를 앞에 두고 `PG_GUARD_COUNT_TOKENS=block`과 `mask`로 각각 1회 돌립니다. 서버에 간 비밀 수와 세션이 끝났는지를 봅니다.
 
@@ -384,6 +410,10 @@ node $PG/src/launcher/system-prompt.cjs --detector-url http://127.0.0.1:<탐지�
 ```
 
 **정우 하네스(`m2.py`)에서 바꿔야 할 점** (이 저장소는 정우 저장소를 건드리지 않습니다):
+- **재마스킹 횟수 (1b):** `audit_stats()`가 `finding_count`만 더합니다. audit 행의 `remasked_count`를 더한 `remasked`(가능하면 `source`별로도)를 `mod` 요약에 넣고, `report`의 조건별 표에 열로 내야 합니다. 값은 audit에 없으므로 개수만 다룹니다.
+- **설정 기록 (1b):** `run_meta`에 Mod·탐지기가 받은 `PG_REMASK`와 탐지 설정(`PG_DETECTOR_FILTERS`, `PG_DETECTOR_FILTER_DUMMY`, `PG_REMASK_SHORT`, `PG_SHELL_POSITIONAL_MIN`, `PG_RULE_HEX_KEY`, `PG_PLACEHOLDER_GUIDE`, `PG_RESTORE_ESCAPED`)을 남겨야 on과 off를 나눠 볼 수 있습니다. 주지 않은 설정은 "기본값"으로 적습니다.
+- **Windows의 promptguard 조건:** 탐지기 Python을 `.venv/bin/python`에서만 찾습니다. Windows에서는 `.venv/Scripts/python.exe`도 찾아야 합니다.
+- **환경변수:** 탐지기 worker와 Claude Code는 둘 다 `clean_env()`로 셸의 `PG_*`를 그대로 받으므로 `PG_REMASK`는 따로 넘길 필요가 없습니다. 다만 실행 중에 셸 설정이 바뀌지 않게 위처럼 이름을 달리해 따로 돌립니다.
 - **Guard 옵션 (2번):** 실행마다 Final Guard를 하나 띄워 Claude Code와 `api_capture.py` 프록시 사이에 둡니다.
   - Claude Code의 `ANTHROPIC_BASE_URL`은 Guard로, Guard의 `PG_UPSTREAM_BASE_URL`은 캡처 프록시로 둡니다. 그래야 캡처에 Guard를 통과한 요청만 남습니다.
   - Guard는 자기 탐지기 worker를 따로 씁니다(`PG_GUARD_DETECTOR_URL`). `PG_GUARD_COUNT_TOKENS`도 Guard 프로세스에 넘깁니다.

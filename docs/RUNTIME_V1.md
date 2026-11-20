@@ -47,6 +47,8 @@ PowerShell에서는 같은 명령을 `promptguard.cmd`로 실행합니다. `run`
 
 기본 설정은 `promptguard.config.json`입니다. 다른 설정은 `--config FILE`, runtime metadata 위치는 `--runtime-dir DIR`로 지정합니다. 주요 환경 변수 override는 `PG_UPSTREAM_BASE_URL`, `PG_PYTHON`, `PG_CLAUDE_BINARY`, `PG_GUARD_PORT`, `PG_MOD_DETECTOR_PORT`, `PG_GUARD_DETECTOR_PORT`, `PG_DETECTOR_TIMEOUT_MS`(Guard는 batch당 적용), `PG_MAX_BODY_BYTES`, `PG_AUDIT_PATH`, `PG_MOD_CONNECT_WAIT_MS`, `PG_GUARD_COUNT_TOKENS`(`block`|`mask`, 기본 `block`)입니다.
 
+탐지기 거르기, 재마스킹, 자리표시자 안내 같은 설정과 기본값은 README의 "설정 한눈에 보기"에 있습니다. `PG_REMASK=off`는 측정용입니다. 끄면 복원한 값이 실행 결과에 다시 나올 때 탐지기가 잡지 못하는 한 원래 값이 그대로 모델에 가므로, 실제 사용에서는 끄지 마세요.
+
 Native Mod의 detector MCP 서버는 세션 시작 후 background로 연결되므로, Mod는 첫 연결까지만 detector 호출을 재시도합니다(`PG_MOD_CONNECT_WAIT_MS`, 기본 15초). 예외를 던진 훅은 Claude Code가 건너뛰기 때문에, 기다리지 않으면 세션 시작 직후의 CLAUDE.md 등이 마스킹 없이 Guard까지 가게 됩니다. 한 번 연결된 뒤의 detector 실패는 기다리지 않고 바로 실패합니다.
 
 Supervisor는 Python 3.12와 3.14 detector worker를 모두 받습니다.

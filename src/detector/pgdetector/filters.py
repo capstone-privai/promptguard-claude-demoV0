@@ -12,7 +12,8 @@ code fragments (&lt;, </p>, function(, attributes[, :unset) found once and re-ma
 - code_fragment  an open call or index of an identifier (function(, attributes[), or a closed one holding only
                  identifiers, attribute references and string literals (get_token(), options['x'])
 - css_value      CSS keywords, px/em/rem/vh/vw/% lengths, and closed CSS functions holding CSS values (var(--x))
-- template       {{ }}, {% %}, ${ }, #{ }, <db-password>, %(name)s, {name}, and PromptGuard's own [TYPE_N]
+- template       {{ }}, {% %}, ${ }, #{ }, <db-password>, %(name)s, {name}, and PromptGuard's own [TYPE_N], also
+                 behind a public prefix of docs/PLACEHOLDER_PUBLIC_PREFIXES.md (sk_live_[TOKEN_1])
 - dummy_value    (PG_DETECTOR_FILTER_DUMMY=on, separately) placeholder shapes only: an exact list (<password>,
                  replace_me, placeholder) and the forms your_*_here, <your-*>, xxx, ***; never a weak default or common
                  real password such as changeme or password123
@@ -24,13 +25,16 @@ filtered. Only the count per filter name is reported; no value is kept.
 from __future__ import annotations
 
 import json
-import os
 import re
 from collections import Counter
 from pathlib import Path
 from typing import Callable, Sequence
 
+from . import settings
 from .adapter import RawFinding
+
+PUBLIC_PREFIX_TABLE = Path(__file__).resolve().parents[3] / "docs" / "PLACEHOLDER_PUBLIC_PREFIXES.md"
+PUBLIC_PREFIX_ROW = re.compile(r"^\|\s*`([^`]+)`\s*\|\s*([A-Z][A-Z0-9_]*)\s*\|", re.M)
 
 RULES_FILE = Path(__file__).resolve().parents[1] / "high-confidence-rules.json"
 
@@ -115,13 +119,42 @@ def template(value: str) -> bool:
     return bool(_TEMPLATE.fullmatch(value))
 
 
+def public_prefix_rows(path: Path = PUBLIC_PREFIX_TABLE) -> list[tuple[str, str]]:
+    """(prefix, type) rows of docs/PLACEHOLDER_PUBLIC_PREFIXES.md; none when the table cannot be read."""
+    try:
+        return PUBLIC_PREFIX_ROW.findall(path.read_text(encoding="utf-8"))
+    except OSError:
+        return []
+
+
+_public_placeholder: re.Pattern[str] | None = None
+
+
+def public_placeholder(value: str) -> bool:
+    """A public prefix of the table followed by a placeholder of any type (sk_live_[TOKEN_1]): what the Native Mod
+    writes with PG_PLACEHOLDER_PUBLIC_PREFIX=on, or what a model writes around a placeholder. Read whatever that
+    setting is. Before release/defaults-1120 the structure filter removed it as code_fragment (an open index); it is
+    removed the same, now counted as template. Only the structure filter asks: template() itself, which
+    secret-assignment also uses, is unchanged."""
+    global _public_placeholder
+    if _public_placeholder is None:
+        prefixes = "|".join(re.escape(prefix) for prefix in sorted({p for p, _ in public_prefix_rows()}, key=len, reverse=True))
+        _public_placeholder = re.compile(rf"(?:{prefixes})\[[A-Z][A-Z0-9_]*_\d+(?:_PART)?\]" if prefixes else r"(?!)")
+    return bool(_public_placeholder.fullmatch(value))
+
+
+def template_or_public_placeholder(value: str) -> bool:
+    return template(value) or public_placeholder(value)
+
+
 def dummy_value(value: str) -> bool:
     return value.lower() in _DUMMY_EXACT or bool(_DUMMY_PATTERN.fullmatch(value))
 
 
 STRUCTURE: list[tuple[str, Callable[[str], bool]]] = [
     # css before code: rgba(0,0,0,0.5) is a CSS value, not a call to keep.
-    ("html_fragment", html_fragment), ("css_value", css_value), ("template", template), ("code_fragment", code_fragment),
+    ("html_fragment", html_fragment), ("css_value", css_value), ("template", template_or_public_placeholder),
+    ("code_fragment", code_fragment),
 ]
 
 
@@ -130,7 +163,7 @@ SETTINGS = ("PG_DETECTOR_FILTERS", "PG_DETECTOR_FILTER_DUMMY")
 
 def filter_settings() -> dict[str, str]:
     """The two settings as on or off, for describe(): the supervisor compares the Mod's and the Guard's workers."""
-    return {name: "on" if os.environ.get(name) == "on" else "off" for name in SETTINGS}
+    return {name: "on" if settings.enabled(name) else "off" for name in SETTINGS}
 
 
 def high_confidence_rules(path: Path = RULES_FILE) -> set[tuple[str, str]]:
@@ -139,7 +172,7 @@ def high_confidence_rules(path: Path = RULES_FILE) -> set[tuple[str, str]]:
 
 
 class Filters:
-    """The filters PG_DETECTOR_FILTERS and PG_DETECTOR_FILTER_DUMMY turn on (both default off)."""
+    """The filters PG_DETECTOR_FILTERS (default on) and PG_DETECTOR_FILTER_DUMMY (default off) turn on."""
 
     def __init__(self, structure: bool, dummy: bool, keep: set[tuple[str, str]]) -> None:
         self.checks = (STRUCTURE if structure else []) + ([("dummy_value", dummy_value)] if dummy else [])
@@ -147,8 +180,8 @@ class Filters:
 
     @classmethod
     def from_env(cls) -> "Filters | None":
-        structure = os.environ.get("PG_DETECTOR_FILTERS") == "on"
-        dummy = os.environ.get("PG_DETECTOR_FILTER_DUMMY") == "on"
+        structure = settings.enabled("PG_DETECTOR_FILTERS")
+        dummy = settings.enabled("PG_DETECTOR_FILTER_DUMMY")
         if not (structure or dummy):
             return None
         return cls(structure, dummy, high_confidence_rules())

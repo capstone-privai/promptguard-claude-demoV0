@@ -19,8 +19,11 @@ const MODEL = 'claude-sonnet-4-5-20250929'
 const SCENARIOS = {
   // Restored value goes into a file; proves the command really ran with the raw value.
   file: { bash: ph => `printf '%s' '${ph}' > restored-proof.txt && echo written`, restore: 'on' },
-  // Restored value is echoed alone, where CredSweeper has no key=value context to detect it.
-  echo: { bash: ph => `printf '%s\\n' '${ph}'`, restore: 'on' },
+  // Restored value is echoed alone, where CredSweeper has no key=value context to detect it. Pinned PG_REMASK=on, so
+  // the script gives the same answer with PG_REMASK=off in the shell.
+  echo: { bash: ph => `printf '%s\\n' '${ph}'`, restore: 'on', env: { PG_REMASK: 'on' } },
+  // PG_REMASK=off (measurement only): the same echo still restores, and its output goes back unmasked.
+  'echo-remask-off': { bash: ph => `printf '%s\\n' '${ph}'`, restore: 'on', env: { PG_REMASK: 'off' }, leaks: true },
   // Restore disabled: the command runs with the placeholder text itself.
   off: { bash: ph => `printf '%s' '${ph}' > restored-proof.txt && echo written`, restore: 'off' },
   // Public prefix on: the model sees prefix + [TYPE_N], the command gets the whole value.
@@ -178,9 +181,11 @@ async function runScenario(name, scenario, detector) {
     read_result_masked: ph !== null,
     provider_requests_after_bash: afterBash.length > 0,
     second_turn_sent: turn2.length > 0,
-    no_raw_in_any_provider_request: !provider.requests.some(r => JSON.stringify(r.body ?? '').includes(RAW_VALUE)),
+    // PG_REMASK=off sends the echoed value back as it is: there the raw value must reach the provider, and only there.
+    [scenario.leaks ? 'raw_reaches_provider_with_remask_off' : 'no_raw_in_any_provider_request']:
+      provider.requests.some(r => JSON.stringify(r.body ?? '').includes(RAW_VALUE)) === Boolean(scenario.leaks),
     history_tool_use_keeps_placeholder: blocks.toolUse?.includes(ph) === true && !blocks.toolUse.includes(RAW_VALUE),
-    no_raw_in_local_transcript: !transcripts.some(f => fs.readFileSync(path.join(dir, 'claude-config', f), 'utf8').includes(RAW_VALUE)),
+    ...(scenario.leaks ? {} : { no_raw_in_local_transcript: !transcripts.some(f => fs.readFileSync(path.join(dir, 'claude-config', f), 'utf8').includes(RAW_VALUE)) }),
     no_raw_in_audit: ![...fs.readdirSync(dir)].filter(f => f.startsWith('audit-')).some(f => fs.readFileSync(path.join(dir, f), 'utf8').includes(RAW_VALUE)),
   }
   if (name === 'prefix') {
@@ -194,6 +199,11 @@ async function runScenario(name, scenario, detector) {
   if (name === 'echo') {
     checks.echoed_raw_remasked_in_tool_result = blocks.toolResult?.includes(ph) === true
     checks.audit_remasked_count_1 = bashScan.remasked_count === 1
+  }
+  if (name === 'echo-remask-off') {
+    checks.echoed_raw_not_remasked_in_tool_result = blocks.toolResult?.includes(RAW) === true && !blocks.toolResult.includes(ph)
+    checks.audit_restored_count_1 = bashStarted.restored_count === 1
+    checks.audit_remasked_count_0 = bashScan.remasked_count === 0
   }
   if (name === 'off') {
     checks.command_ran_with_placeholder = proof === ph

@@ -111,6 +111,8 @@ def scan(value: str, env: dict[str, str], adapter: str = "credsweeper", rule: st
 
 
 ON = {"PG_DETECTOR_FILTERS": "on"}
+# PG_DETECTOR_FILTERS is on by default since release/defaults-1120: the earlier behaviour needs off given explicitly.
+OFF = {"PG_DETECTOR_FILTERS": "off"}
 DUMMY = {"PG_DETECTOR_FILTER_DUMMY": "on"}
 
 
@@ -125,10 +127,17 @@ class Filters(unittest.TestCase):
     def test_off_changes_nothing(self) -> None:
         for shape, value, _ in SHAPES:
             with self.subTest(shape=shape):
-                for env in ({}, {"PG_DETECTOR_FILTERS": "off"}):
+                for env in (OFF, {**OFF, "PG_DETECTOR_FILTER_DUMMY": "off"}):
                     result = scan(value, env)
                     self.assertEqual(result["finding_count"], 1)
                     self.assertNotIn("filtered", result)
+
+    def test_on_by_default(self) -> None:
+        for shape, value, _ in SHAPES:
+            with self.subTest(shape=shape):
+                for env in ({}, {"PG_DETECTOR_FILTERS": ""}):
+                    result, on = scan(value, env), scan(value, ON)
+                    self.assertEqual((result["finding_count"], result.get("filtered")), (on["finding_count"], on.get("filtered")))
 
     def test_dummy_values_only_with_their_own_switch(self) -> None:
         for value in DUMMIES:
@@ -140,7 +149,7 @@ class Filters(unittest.TestCase):
                 self.assertEqual(scan(value, DUMMY)["filtered"], {"dummy_value": 1}, "independent of PG_DETECTOR_FILTERS")
 
     def test_dummy_switch_does_not_turn_on_the_other_filters(self) -> None:
-        self.assertEqual(scan("</p>", DUMMY)["finding_count"], 1)
+        self.assertEqual(scan("</p>", {**OFF, **DUMMY})["finding_count"], 1)
 
     def test_real_passwords_with_look_alike_characters_pass(self) -> None:
         for value in REAL:
@@ -177,7 +186,8 @@ class Filters(unittest.TestCase):
 
 class Settings(unittest.TestCase):
     def test_describe_reports_the_setting_names_only(self) -> None:
-        for env, expected in (({}, {"PG_DETECTOR_FILTERS": "off", "PG_DETECTOR_FILTER_DUMMY": "off"}),
+        for env, expected in (({}, {"PG_DETECTOR_FILTERS": "on", "PG_DETECTOR_FILTER_DUMMY": "off"}),
+                              (OFF, {"PG_DETECTOR_FILTERS": "off", "PG_DETECTOR_FILTER_DUMMY": "off"}),
                               ({**ON, **DUMMY}, {"PG_DETECTOR_FILTERS": "on", "PG_DETECTOR_FILTER_DUMMY": "on"})):
             with mock.patch.dict(os.environ, env):
                 if not env:
@@ -238,8 +248,9 @@ class SecretAssignment(unittest.TestCase):
     def test_code_values_are_skipped_when_on(self) -> None:
         for text in self.CODE:
             with self.subTest(case=self.CODE.index(text)):
-                self.assertEqual(self.found(text, {}), 1, "off: found as today")
+                self.assertEqual(self.found(text, OFF), 1, "off: found as before")
                 self.assertEqual(self.found(text, ON), 0)
+                self.assertEqual(self.found(text, {}), 0, "on by default")
 
     def test_declined_values_are_counted_by_reason(self) -> None:
         with mock.patch.dict(os.environ, ON):

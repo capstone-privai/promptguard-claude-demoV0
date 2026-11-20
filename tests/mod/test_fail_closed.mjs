@@ -129,7 +129,9 @@ for (const [name, { e, check }] of Object.entries(CASES)) {
 test('prompt.compose: a detector failure on composed sections sends the block marker', async () => {
   const mod = await load('throw')
   const result = await dispatch(mod, 'prompt.compose', mod.$, {}, () => ({ sections: [{ id: 's1', text: `pw ${PASSWORD}`, scope: 'session' }] }))
-  assert.deepEqual(result, { sections: [{ id: 's1', text: BLOCKED, scope: 'session' }] })
+  // The placeholder guide (on by default) is PromptGuard's own text, added after the blocked sections.
+  assert.deepEqual(result.sections.filter(section => section.id !== 'promptguard:placeholder-guide'), [{ id: 's1', text: BLOCKED, scope: 'session' }])
+  assert.ok(result.sections.every(section => !section.text.includes(PASSWORD)))
 })
 
 test('session.compact: a detector failure skips compaction instead of sending history', async () => {

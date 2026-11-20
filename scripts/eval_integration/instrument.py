@@ -7,6 +7,9 @@ remask_floor/run_eval.py, code unchanged).
   (promptguard_adapter.ModSession); for boundary this swaps in a ModSession that re-masks a known value shorter than 8
   characters only where no [A-Za-z0-9_] stands next to it, as register.mjs does. The scorer does not restore
   tool_input, so a restored short value is not replayed here; register.mjs applies the same rule to it.
+- install_no_remask: PG_REMASK=off (release/defaults-1120) swaps in a ModSession whose re-mask does nothing, as
+  register.mjs does: the ledger and the reverse map still fill, only the re-mask pass is skipped. Installed last, it
+  also skips install_boundary's short-value pass.
 The scorer's repository is not changed.
 """
 
@@ -116,4 +119,14 @@ def install_boundary(module: Any) -> None:
             return "".join(char for char, *_ in chars), [edit_type(start=s, end=e, replacement=r) for s, e, r in merged]
 
     module.ModSession = BoundaryModSession
+
+
+def install_no_remask(module: Any) -> None:
+    base = module.ModSession
+
+    class NoRemaskModSession(base):  # type: ignore[misc, valid-type]
+        def _remask(self, text: str, out: str, edits: list[Any]) -> tuple[str, list[Any]]:
+            return out, edits
+
+    module.ModSession = NoRemaskModSession
 

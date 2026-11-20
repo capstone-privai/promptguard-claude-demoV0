@@ -1,7 +1,8 @@
 // Short-value re-mask tests for the Native Mod. Run: node --test tests/mod/test_remask_short.mjs
 //
 // PG_REMASK_SHORT=boundary: a known value shorter than 8 characters is re-masked only where it stands as a word
-// (no [A-Za-z0-9_] right before or after it). substring (default) keeps today's behaviour. Synthetic values only.
+// (no [A-Za-z0-9_] right before or after it); the default since release/defaults-1120. substring (or any other value,
+// off included) keeps the earlier behaviour. Synthetic values only.
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { test } from 'node:test'
@@ -63,8 +64,16 @@ test('boundary: a hex key that contains a found "e" is left as it is', async () 
   assert.equal(await read(hooks, $, `key = ${HEX_KEY}\n`), `key = ${HEX_KEY}\n`)
 })
 
-test('substring (default): today\'s behaviour, every "e" in the hex key is masked', async () => {
-  for (const mode of [null, 'substring', 'other']) {
+test('boundary is the default (unset or empty)', async () => {
+  for (const mode of [null, '']) {
+    const { hooks, $ } = await load(mode)
+    assert.equal(await read(hooks, $, 'CreateOrUpdateEnvSecret(ctx, 1, "e", input)'), 'CreateOrUpdateEnvSecret(ctx, 1, "[PASSWORD_1]", input)')
+    assert.equal(await read(hooks, $, `key = ${HEX_KEY}\n`), `key = ${HEX_KEY}\n`, JSON.stringify(mode))
+  }
+})
+
+test('substring, off or another value: the earlier behaviour, every "e" in the hex key is masked', async () => {
+  for (const mode of ['substring', 'off', 'other']) {
     const { hooks, $ } = await load(mode)
     await read(hooks, $, 'CreateOrUpdateEnvSecret(ctx, 1, "e", input)')
     const out = await read(hooks, $, `key = ${HEX_KEY}\n`)

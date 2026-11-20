@@ -11,7 +11,7 @@
 
 ## 무엇을 거르나
 
-두 설정 모두 기본값은 `off`이고, `off`면 지금과 결과가 같다.
+`PG_DETECTOR_FILTERS`는 release/defaults-1120부터 기본 `on`이다(정우 측정: 실제 트래픽 오탐 약 −30%, 새로 놓친 정답 0). `PG_DETECTOR_FILTERS=off`를 주면 #23 이전과 결과가 같다. `PG_DETECTOR_FILTER_DUMMY`는 기본 `off`다.
 
 | 설정 | 이름 | 걸러지는 값 | 예 |
 |---|---|---|---|
@@ -20,7 +20,7 @@
 | | `assignment_template` | `secret-assignment`만: 값이 템플릿. 따옴표 안에서도 거른다 | `{{vault_password}}`, `"%(secret_key)s"` |
 | | `html_fragment` | 모든 탐지기: HTML 엔티티나 알려진 HTML 태그, 그 사이에 글자·공백·`/`만 있는 값 | `&lt;/p&gt;`, `</p>`, `<pre><code>`, `&#39;` |
 | | `css_value` | 모든 탐지기: CSS 키워드, `px`·`em`·`rem`·`vh`·`vw`·`%` 길이, 닫는 괄호까지 있고 안이 CSS 값인 함수 | `:unset`, `!important`, `12px`, `50%`, `rgba(0,0,0,0.5)`, `var(--main-color)`, `calc(100% - 12px)` |
-| | `template` | 모든 탐지기: 템플릿과 자리표시자 | `{{ x }}`, `{% x %}`, `${X}`, `#{x}`, `<db-password>`, `%(x)s`, `{x}`, `[PASSWORD_1]` |
+| | `template` | 모든 탐지기: 템플릿과 자리표시자 | `{{ x }}`, `{% x %}`, `${X}`, `#{x}`, `<db-password>`, `%(x)s`, `{x}`, `[PASSWORD_1]`, 그리고 [공개 접두어 표](PLACEHOLDER_PUBLIC_PREFIXES.md)의 접두어 + 자리표시자(`sk_live_[TOKEN_1]`). 뒤의 것은 전에는 `code_fragment`(열린 인덱스)로 셌다. 걸러지는 것은 같고 집계 이름만 바뀌었다 |
 | | `code_fragment` | 모든 탐지기: `(`나 `[`로 끝나는 식별자, 또는 닫혔는데 안에 코드만 있는 호출·인덱스(아래) | `function(`, `attributes[`, `get_token()`, `options['password']`, `os.environ["DB_PASS"]`, `config.get("db.password")` |
 | `PG_DETECTOR_FILTER_DUMMY=on` (따로) | `dummy_value` | 모든 탐지기: 자리표시 모양만 (정확히 일치하는 목록과 명시적 패턴) | `<password>`, `replace_me`, `your_api_key_here`, `<your-token>`, `xxxxxxxx`, `********`, `REDACTED` |
 

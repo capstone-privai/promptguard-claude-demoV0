@@ -11,6 +11,10 @@ Per run (scored channels only):
 - filtered: findings removed per filter name (filters.jsonl)
 - newly missed: gold covered under the baseline configuration (configs.BASELINE) and not here, by gold type, the rule
   that found it under the baseline, the filter over it here and the value's shape
+- re-mask only (configuration 8): gold covered by 7 and not by 8 (new defaults with PG_REMASK=off), spans and distinct
+  values; what only the re-mask hid
+- re-mask FP of configuration 7 by catcher: the distinct values among its re-mask false positives, and per detector
+  rule that first found the value in the session (earliest item, then offset), the spans and distinct values
 Configuration 7 on CredData-trajectory is also split by candidate tier: immediate (a rule of
 src/detector/high-confidence-rules.json, or confidence strong) and ambiguous (any other moderate or ambiguous
 finding), with each tier's true and false positives and, per rule, the gold spans only that rule found in the
@@ -25,7 +29,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterator
 
-from configs import BASELINE, CONFIGS
+from configs import ALL_SETS, BASELINE, CONFIGS
+
+REMASK_PAIR = ("7-all", "8-defaults-no-remask")  # covered by the first and not the second: covered by the re-mask only
 
 MAX_SPAN = 8192  # pgdetector core.MAX_SPAN
 
@@ -104,7 +110,8 @@ def numbers(run: Path, texts: Texts) -> dict[str, Any]:
     items = texts.get(meta["dataset"]["sessions_path"])
     gold = [r for r in jsonl(run / "per_span.jsonl") if r["scored"]]
     edits = [r for r in jsonl(run / "per_edit.jsonl") if r["scored"]]
-    findings = [r for r in jsonl(run / "per_finding.jsonl") if r["valid"] and r["scored"]]
+    valid = [r for r in jsonl(run / "per_finding.jsonl") if r["valid"]]
+    findings = [r for r in valid if r["scored"]]
     covered = {(r["session_id"], r["item_id"], r["span_id"]) for r in gold if r["status"] in ("exact", "over")}
     gold_by_item: dict[tuple[str, int], list[tuple[int, int]]] = defaultdict(list)
     for r in gold:
@@ -128,7 +135,8 @@ def numbers(run: Path, texts: Texts) -> dict[str, Any]:
         by_item[(r["session_id"], r["item_id"])].append((r["start"], r["end"]))
     for key, spans in by_item.items():
         unions[key] = set(merge(spans, MAX_SPAN))
-    remask_fp = sum(1 for r in edits if not r["overlaps_gold"] and (r["start"], r["end"]) not in unions.get((r["session_id"], r["item_id"]), set()))
+    remask_fp_edits = [r for r in edits if not r["overlaps_gold"] and (r["start"], r["end"]) not in unions.get((r["session_id"], r["item_id"]), set())]
+    remask_fp = len(remask_fp_edits)
     filtered: Counter = Counter()
     filtered_rules: Counter = Counter()
     removed: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
@@ -152,6 +160,7 @@ def numbers(run: Path, texts: Texts) -> dict[str, Any]:
         "missed_spans": len(missed), "missed_values": len({value_of(r) for r in missed}),
         "remask_fp": remask_fp, "fp_per_1k": metrics.get("fp_per_1k_lines"), "filtered": filtered, "filtered_rules": filtered_rules,
         "removed": removed, "rules_over": rules_over, "findings": findings, "value_of": value_of,
+        "remask_fp_edits": remask_fp_edits, "all_findings": valid,
         "scorer": (metrics.get("recall"), metrics.get("precision")),
     }
 
@@ -167,6 +176,44 @@ def newly_missed(base: dict[str, Any], run: dict[str, Any]) -> Counter:
         found_by = ", ".join(sorted(base["rules_over"].get(key, ()))) or "(재마스킹)"
         out[(r["type"], found_by, filters, shape(base["value_of"](r)))] += 1
     return out
+
+
+def remask_only(covering: dict[str, Any], without: dict[str, Any]) -> tuple[int, int]:
+    """Gold spans `covering` (7) covers and `without` (8, PG_REMASK=off) does not, and their distinct values."""
+    lost = [r for r in covering["gold"]
+            if (r["session_id"], r["item_id"], r["span_id"]) in covering["covered"] and (r["session_id"], r["item_id"], r["span_id"]) not in without["covered"]]
+    return len(lost), len({covering["value_of"](r) for r in lost})
+
+
+NO_CATCHER = "(세션 안에 그 값을 낸 후보 없음)"
+
+
+def remask_fp_by_catcher(run: dict[str, Any]) -> tuple[int, Counter, Counter]:
+    """The re-mask false positives' distinct values, and per catcher (the adapter:rule of the session's first finding
+    of that value, earliest item then offset; several rules joined when they found it at the same place) the spans and
+    distinct values. Values stay in memory."""
+    value_of = run["value_of"]
+    first: dict[tuple[str, str], tuple[tuple[int, int, int], set[str]]] = {}
+    for r in run["all_findings"]:
+        key, at = (r["session_id"], value_of(r)), (r["item_id"], r["start"], r["end"])
+        if not key[1]:
+            continue
+        rule = f"{r['adapter']}:{r['rule_id']}"
+        if key not in first or at < first[key][0]:
+            first[key] = (at, {rule})
+        elif at == first[key][0]:
+            first[key][1].add(rule)
+    spans: Counter = Counter()
+    values: dict[str, set[str]] = defaultdict(set)
+    distinct: set[str] = set()
+    for r in run["remask_fp_edits"]:
+        value = value_of(r)
+        found = first.get((r["session_id"], value))
+        catcher = ", ".join(sorted(found[1])) if found else NO_CATCHER
+        spans[catcher] += 1
+        values[catcher].add(value)
+        distinct.add(value)
+    return len(distinct), spans, Counter({catcher: len(v) for catcher, v in values.items()})
 
 
 def tiers(run: dict[str, Any], high: set[tuple[str, str]]) -> tuple[dict[str, Counter], Counter]:
@@ -187,6 +234,14 @@ def tiers(run: dict[str, Any], high: set[tuple[str, str]]) -> tuple[dict[str, Co
     return counts, solo
 
 
+def remask_cell(runs: dict[tuple[str, str], dict[str, Any]], config: str, name: str) -> str:
+    covering, without = (runs.get((c, name)) for c in REMASK_PAIR)
+    if config != REMASK_PAIR[1] or covering is None or without is None:
+        return "-"
+    spans, values = remask_only(covering, without)
+    return f"{spans} / {values}"
+
+
 def fmt(value: Any) -> str:
     return "-" if value is None else f"{value:.4f}" if isinstance(value, float) else str(value)
 
@@ -204,17 +259,20 @@ def build(out: Path, main_root: Path, branch_root: Path) -> Path:
     cred = manifest["creddata"]
     traffic = manifest["traffic"]
     lines = ["# 통합 측정 (eval/integration-1118)", "",
-             f"- 데이터: CredData-trajectory `{cred}` (7개 설정), 기존 셋 {len(manifest['nine'])}개 (1·7번), 실제 트래픽 {', '.join(traffic) or '-'} (7개 설정)",
+             f"- 데이터: CredData-trajectory `{cred}` (8개 설정), 기존 셋 {len(manifest['nine'])}개 (1·7·8번), 실제 트래픽 {', '.join(traffic) or '-'} (8개 설정)",
+             "- 8번은 새 기본값(release/defaults-1120)에 `PG_REMASK=off`다. 재마스킹으로만 가린 정답은 7번이 덮고 8번이 못 덮은 정답이다. "
+             "7번은 `PG_DETECTOR_FILTER_DUMMY`도 켜므로, 그 거르기로 7번이 놓친 정답은 이 수에 들지 않는다.",
              "- recall은 정답 span을 다 덮었는가, precision은 가린 글자 중 정답 글자의 비율이다. 값은 적지 않는다.", "",
              f"## CredData-trajectory ({cred})", "",
-             "| 설정 | recall | 글자 precision | F2 | 못 가린 span / 고유 값 | 재마스킹 오탐 | " + " | ".join(f"{t} 1,000줄당 오탐" for t in traffic) + " | 걸러낸 수 (거르기별) | 새로 놓친 정답 |",
-             "|" + "---|" * (8 + len(traffic))]
+             "| 설정 | recall | 글자 precision | F2 | 못 가린 span / 고유 값 | 재마스킹 오탐 | " + " | ".join(f"{t} 1,000줄당 오탐" for t in traffic)
+             + " | 걸러낸 수 (거르기별) | 새로 놓친 정답 | 재마스킹으로만 가린 정답 (span / 고유 값) |",
+             "|" + "---|" * (9 + len(traffic))]
     missed_rows, rule_rows, warnings = [], [], []
     for config in manifest["configs"]:
         n = runs.get((config, cred))
         label = f"{config} ({CONFIGS[config][2]})"
         if n is None:
-            lines.append(f"| {label} | 실행 없음 |" + " |" * (7 + len(traffic)))
+            lines.append(f"| {label} | 실행 없음 |" + " |" * (8 + len(traffic)))
             continue
         base = runs.get((BASELINE.get(config, ""), cred))
         lost = newly_missed(base, n) if base else Counter()
@@ -225,7 +283,7 @@ def build(out: Path, main_root: Path, branch_root: Path) -> Path:
         fp = [fmt(runs[(config, t)]["fp_per_1k"]) if (config, t) in runs else "-" for t in traffic]
         filtered = ", ".join(f"{k} {v}" for k, v in sorted(n["filtered"].items())) or "-"
         lines.append(f"| {label} | {fmt(n['recall'])} | {fmt(n['precision'])} | {fmt(n['f2'])} | {n['missed_spans']} / {n['missed_values']} | "
-                     f"{n['remask_fp']} | " + " | ".join(fp) + f" | {filtered} | {sum(lost.values()) if base else '-'} |")
+                     f"{n['remask_fp']} | " + " | ".join(fp) + f" | {filtered} | {sum(lost.values()) if base else '-'} | {remask_cell(runs, config, cred)} |")
     for (config, name), n in runs.items():
         recall, precision = n["scorer"]
         if recall is not None and n["recall"] is not None and abs(recall - n["recall"]) > 1e-9:
@@ -245,14 +303,23 @@ def build(out: Path, main_root: Path, branch_root: Path) -> Path:
                   *[f"| {tier} | {c['TP']} | {c['FP']} |" for tier, c in counts.items()],
                   "", "애매함 구간에서 그 규칙만 찾은 정답 span (바로 가림 후보가 겹치지 않은 정답):", ""]
         lines += (["| adapter:rule | 정답 span |", "|---|---|", *[f"| {rule} | {count} |" for rule, count in solo.most_common()]] if solo else ["없음."])
+    if ("7-all", cred) in runs:
+        distinct, spans, values = remask_fp_by_catcher(runs[("7-all", cred)])
+        lines += ["", "## 7번(전부 on) 재마스킹 오탐: 그 값을 처음 잡은 탐지기·규칙별", "",
+                  f"재마스킹 오탐 {runs[('7-all', cred)]['remask_fp']}개, 고유 값 {distinct}개. 처음 잡은 후보는 같은 세션에서 그 값을 낸 가장 앞 항목·위치의 "
+                  "후보이고, 같은 자리를 여러 규칙이 냈으면 함께 적는다. 값은 적지 않는다.", ""]
+        lines += (["| 처음 잡은 탐지기:규칙 | 재마스킹 오탐 span | 고유 값 |", "|---|---|---|",
+                   *[f"| {catcher} | {count} | {values[catcher]} |" for catcher, count in spans.most_common()]] if spans else ["없음."])
     if manifest["nine"]:
-        lines += ["", "## 기존 셋 (1번과 7번)", "",
-                  "| 데이터셋 | 설정 | recall | 글자 precision | F2 | 못 가린 span / 고유 값 | 재마스킹 오탐 | 1,000줄당 오탐 |", "|---|---|---|---|---|---|---|---|"]
+        lines += ["", "## 기존 셋 (1번, 7번, 8번)", "",
+                  "| 데이터셋 | 설정 | recall | 글자 precision | F2 | 못 가린 span / 고유 값 | 재마스킹 오탐 | 1,000줄당 오탐 | 재마스킹으로만 가린 정답 (span / 고유 값) |",
+                  "|---|---|---|---|---|---|---|---|---|"]
         for name in manifest["nine"]:
-            for config in ("1-main", "7-all"):
+            for config in ALL_SETS:
                 n = runs.get((config, name))
                 if n:
-                    lines.append(f"| {name} | {config} | {fmt(n['recall'])} | {fmt(n['precision'])} | {fmt(n['f2'])} | {n['missed_spans']} / {n['missed_values']} | {n['remask_fp']} | {fmt(n['fp_per_1k'])} |")
+                    lines.append(f"| {name} | {config} | {fmt(n['recall'])} | {fmt(n['precision'])} | {fmt(n['f2'])} | {n['missed_spans']} / {n['missed_values']} | "
+                                 f"{n['remask_fp']} | {fmt(n['fp_per_1k'])} | {remask_cell(runs, config, name)} |")
     if warnings:
         lines += ["", "## 채점기 값과 다른 곳 (이 보고서가 다시 센 값과 채점기 metrics.json)", "", *warnings]
     path = out / "report.md"

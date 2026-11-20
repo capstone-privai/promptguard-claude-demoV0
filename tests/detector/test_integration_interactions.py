@@ -117,7 +117,8 @@ class EscapedValuesUnderFilters(unittest.TestCase):
 
 class PublicPrefixUnderFilters(unittest.TestCase):
     """main's public prefix (#21) x #23: with the filters on, an adapter's span over prefix + [TYPE_N] is removed
-    as code (code_fragment), whatever the row's type. That text holds no raw value; a whole value is still found."""
+    as a template, whatever the row's type (release/defaults-1120; it was counted as code_fragment before). That text
+    holds no raw value; a whole value is still found. With the filters off it is found as before."""
 
     PREFIX = "_".join(["sk", "live", ""])
 
@@ -134,12 +135,31 @@ class PublicPrefixUnderFilters(unittest.TestCase):
         with mock.patch.dict(os.environ, env):
             return Detector([Stub("stub", {}, ROOT)], ConsensusPolicy.parse("any"), candidate_policy="union").scan(f"API_KEY={value}", "outbound")
 
-    def test_placeholder_text_is_removed_as_code(self) -> None:
-        for placeholder in ("[STRIPE_SECRET_KEY_1]", "[GITHUB_TOKEN_1]"):
+    def test_placeholder_text_is_removed_as_a_template(self) -> None:
+        for placeholder in ("[STRIPE_SECRET_KEY_1]", "[GITHUB_TOKEN_1]", "[TOKEN_1]", "[STRIPE_SECRET_KEY_1_PART]"):
             for prefix_option in ("off", "on"):
-                with self.subTest(placeholder=placeholder, public_prefix=prefix_option):
-                    result = self.stub_scan(self.PREFIX + placeholder, {**ON, "PG_PLACEHOLDER_PUBLIC_PREFIX": prefix_option})
-                    self.assertEqual((result["finding_count"], result["filtered"]), (0, {"code_fragment": 1}))
+                for env in (ON, {}):
+                    with self.subTest(placeholder=placeholder, public_prefix=prefix_option, default=not env):
+                        result = self.stub_scan(self.PREFIX + placeholder, {**env, "PG_PLACEHOLDER_PUBLIC_PREFIX": prefix_option})
+                        self.assertEqual((result["finding_count"], result["filtered"]), (0, {"template": 1}))
+
+    def test_other_prefixes_of_the_table(self) -> None:
+        for prefix in ("AKIA", "ghp_", "xoxb-", "sk-ant-", "github_pat_"):
+            with self.subTest(prefix=prefix):
+                result = self.stub_scan(prefix + "[TOKEN_1]", ON)
+                self.assertEqual((result["finding_count"], result["filtered"]), (0, {"template": 1}))
+
+    def test_filters_off_finds_it_as_before(self) -> None:
+        with mock.patch.dict(os.environ):
+            os.environ.pop("PG_PLACEHOLDER_PUBLIC_PREFIX", None)
+            result = self.stub_scan(self.PREFIX + "[TOKEN_1]", OFF)
+        self.assertEqual(result["finding_count"], 1)
+        self.assertNotIn("filtered", result)
+
+    def test_a_word_before_a_placeholder_is_still_code(self) -> None:
+        """Only the table's prefixes make a template; any other identifier in front stays an index (code_fragment)."""
+        result = self.stub_scan("options[TOKEN_1]", ON)
+        self.assertEqual((result["finding_count"], result["filtered"]), (0, {"code_fragment": 1}))
 
     def test_a_whole_value_is_still_found(self) -> None:
         for prefix_option in ("off", "on"):

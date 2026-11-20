@@ -29,12 +29,12 @@ source/sink semantics, and never logs or retains candidate values.
 from __future__ import annotations
 
 import bisect
-import os
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from .. import settings
 from ..adapter import DetectorAdapter, RawFinding
 
 
@@ -323,12 +323,12 @@ class ShellAwareAdapter(DetectorAdapter):
     def __init__(self, name: str, options: Mapping[str, Any], config_dir: Path) -> None:
         super().__init__(name, options, config_dir)
         self.min_value_length = max(1, int(options.get("min_value_length", 1)))
-        # PG_SHELL_POSITIONAL_MIN (default 1, today's behaviour): a positional literal that only a credential-named
+        # PG_SHELL_POSITIONAL_MIN (default 4 since release/defaults-1120; 1 is the earlier behaviour): a positional literal that only a credential-named
         # function makes a candidate must be at least this long; 4 is CredSweeper's minimum. On the CredData-
         # trajectory test, CreateOrUpdateEnvSecret(ctx, 1, "e", input) gave "e", which the Native Mod then
         # re-masked inside every hex key. Keyword arguments and the command-flag rules keep min_value_length.
         try:
-            positional_min = int(os.environ.get("PG_SHELL_POSITIONAL_MIN") or 1)
+            positional_min = int(settings.value("PG_SHELL_POSITIONAL_MIN"))
         except ValueError:
             positional_min = 1
         self.positional_min = positional_min if positional_min >= 1 else 1
