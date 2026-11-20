@@ -1,6 +1,14 @@
 {
   "consensus": { "mode": "majority" },
   "candidate_policy": "union",
+  "verifier": {
+    "repository": "../../../promptguard-model",
+    "bundle": "runs/verifier/creddata-mmbert-small/model",
+    "device": "cpu",
+    "recall_target": null,
+    "context_lines": 3,
+    "timeout_seconds": 4
+  },
   "adapters": [
     {
       "name": "credsweeper",

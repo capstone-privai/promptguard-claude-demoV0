@@ -16,11 +16,14 @@ from .adapter import AdapterUnavailable, DetectorAdapter, RawFinding
 from .adapters import ADAPTER_TYPES
 from .consensus import ConsensusPolicy, vote
 from .core import CANONICAL_TYPES, MAX_SPAN, normalize, value_hash
+from .verifier import VerifierStage
 
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "detector.json"
 Ballots = dict[str, list[RawFinding]]
-CANDIDATE_POLICIES = ("union", "majority")
+CANDIDATE_POLICIES = ("union", "majority", "verifier")
+# The canonical finding fields a protected candidate keeps (src/shared/canonical-finding.schema.json).
+FINDING_FIELDS = ("type", "rule_id", "detectors", "confidence", "value_hash", "start", "end", "source", "offset_unit")
 PUBLIC_PREFIX_TABLE = Path(__file__).resolve().parents[3] / "docs" / "PLACEHOLDER_PUBLIC_PREFIXES.md"
 PUBLIC_PREFIX_ROW = re.compile(r"^\|\s*`([^`]+)`\s*\|\s*([A-Z][A-Z0-9_]*)\s*\|", re.M)
 
@@ -41,12 +44,17 @@ def public_placeholder_pattern() -> re.Pattern[str] | None:
 
 
 class Detector:
-    def __init__(self, adapters: Sequence[DetectorAdapter], policy: ConsensusPolicy, skipped: Sequence[Mapping[str, str]] = (), candidate_only: Sequence[str] = (), candidate_policy: str = "majority") -> None:
+    def __init__(self, adapters: Sequence[DetectorAdapter], policy: ConsensusPolicy, skipped: Sequence[Mapping[str, str]] = (), candidate_only: Sequence[str] = (), candidate_policy: str = "majority", verifier: Any = None) -> None:
         names = [adapter.name for adapter in adapters]
         if len(set(names)) != len(names):
             raise ValueError(f"adapter names must be unique: {names}")
         if candidate_policy not in CANDIDATE_POLICIES:
             raise ValueError(f"candidate_policy must be one of {CANDIDATE_POLICIES}, got {candidate_policy!r}")
+        if (candidate_policy == "verifier") != (verifier is not None):
+            raise ValueError('a verifier is used with candidate_policy "verifier" and only with it')
+        # "verifier": candidates get their strength from the majority vote, as under "majority"; then strong ones and
+        # the ambiguous ones the verifier accepts are protected (see verifier.py).
+        self.verifier = verifier
         self.adapters = list(adapters)
         self.policy = policy
         self.candidate_policy = candidate_policy
@@ -85,6 +93,7 @@ class Detector:
             "majority_adapters": self.majority_names,
             "candidate_adapters": self.names,
             "candidate_only_adapters": sorted(self.candidate_only),
+            "verifier": self.verifier.describe() if self.verifier is not None else None,
             "skipped": self.skipped,
         }
 
@@ -178,11 +187,15 @@ class Detector:
             raw.extend(_injected_findings(mode, text))
             findings, normalize_errors = normalize(raw, text, source)
             candidates, candidate_errors = self.candidate_decide(text, source, ballots)
+            hashes = [candidate.get("value_hash") for candidate in candidates]
             _decorate_candidates(candidates, findings)
+            verifier_errors: list[str] = []
+            if self.verifier is not None:
+                findings, verifier_errors = self.verified_findings(text, source, candidates, hashes)
             if mode == "unicode_mismatch":
                 for finding in findings:
                     finding["offset_unit"] = "code_points"
-            decided.append((findings, candidates, sorted(set(adapter_errors + errors + normalize_errors + candidate_errors))))
+            decided.append((findings, candidates, sorted(set(adapter_errors + errors + normalize_errors + candidate_errors + verifier_errors))))
 
         # Adapters scan the batch together, so latency is the batch wall time.
         elapsed = round((time.perf_counter() - started) * 1000, 3)
@@ -203,6 +216,29 @@ class Detector:
 
     def scan(self, text: str, source: str) -> dict[str, Any]:
         return self.scan_many([(text, source)])[0]
+
+    def verified_findings(self, text: str, source: str, candidates: list[dict[str, Any]], hashes: Sequence[str | None]) -> tuple[list[dict[str, Any]], list[str]]:
+        """candidate_policy "verifier": strong candidates plus the ambiguous ones the verifier accepts, as findings.
+
+        Fails closed: when the verifier cannot score, every ambiguous candidate is protected and the scan reports
+        ADAPTER_FAILURE:verifier. Each scored candidate gets ``verifier_score`` (a number, never text).
+        """
+        ambiguous = [index for index, candidate in enumerate(candidates) if candidate["strength"] == "ambiguous"]
+        errors: list[str] = []
+        try:
+            scores = self.verifier.score(text, source, [candidates[index] for index in ambiguous])
+        except Exception as exc:
+            # Exception text may quote the scanned input, so only the type is logged.
+            print(f"PromptGuard detector: verifier failed ({type(exc).__name__})", file=sys.stderr, flush=True)
+            scores, errors = [1.0] * len(ambiguous), ["ADAPTER_FAILURE:verifier"]
+        else:
+            for index, score in zip(ambiguous, scores):
+                candidates[index]["verifier_score"] = round(score, 6)
+        accepted = {index for index, score in zip(ambiguous, scores) if score >= self.verifier.threshold}
+        protected = [index for index, candidate in enumerate(candidates) if candidate["strength"] == "strong" or index in accepted]
+        findings = [{field: hashes[index] if field == "value_hash" else candidates[index][field] for field in FINDING_FIELDS}
+                    for index in protected]
+        return findings, errors
 
 
 def _injected_findings(mode: str, text: str) -> list[dict[str, Any]]:
@@ -249,7 +285,10 @@ def load_detector(config_path: str | Path | None = None, consensus: Any = None) 
     ``PG_DETECTOR_CONFIG`` and ``PG_DETECTOR_CONSENSUS`` override the config file
     and its consensus policy, and ``PG_DETECTOR_CANDIDATE_POLICY`` overrides
     ``candidate_policy`` ("union" masks what any adapter finds; "majority" keeps
-    the original vote and ignores candidate-only adapters for protection).
+    the original vote and ignores candidate-only adapters for protection;
+    "verifier" masks strong candidates and the ambiguous ones the back-end
+    verifier accepts, with the model named by the config's "verifier" entry or
+    ``PG_VERIFIER_BUNDLE``).
     ``PG_DETECTOR_ENABLE`` / ``PG_DETECTOR_DISABLE`` (comma-separated adapter
     names) switch entries on or off without editing the file; DISABLE wins. An
     adapter whose tool is missing aborts startup unless its entry sets
@@ -285,4 +324,6 @@ def load_detector(config_path: str | Path | None = None, consensus: Any = None) 
             skipped.append({"name": name, "reason": str(exc)})
             print(f"PromptGuard detector: optional adapter {name!r} skipped ({exc})", file=sys.stderr, flush=True)
     candidate_policy = os.environ.get("PG_DETECTOR_CANDIDATE_POLICY") or config.get("candidate_policy", "majority")
-    return Detector(adapters, policy, skipped, candidate_only, candidate_policy)
+    # "verifier" loads the "verifier" entry (verifier.py). Asked for, it must run: a missing bundle stops startup.
+    verifier = VerifierStage(config.get("verifier", {}), path.parent) if candidate_policy == "verifier" else None
+    return Detector(adapters, policy, skipped, candidate_only, candidate_policy, verifier)

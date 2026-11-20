@@ -67,7 +67,15 @@ test('--disable wins over --enable and removes the detector', () => {
 
 test('--policy is validated and passed through', () => {
   assert.equal(detectorEnvironment({ policy: 'majority' }, clean).env.PG_DETECTOR_CANDIDATE_POLICY, 'majority')
-  assert.throws(() => detectorEnvironment({ policy: 'any' }, clean), /union or majority/)
+  assert.throws(() => detectorEnvironment({ policy: 'any' }, clean), /union, majority or verifier/)
+})
+
+test('--policy verifier passes through and waits for the verifier model to load', () => {
+  const result = detectorEnvironment({ policy: 'verifier' }, clean)
+  assert.equal(result.env.PG_DETECTOR_CANDIDATE_POLICY, 'verifier')
+  assert.equal(result.env.PG_READINESS_TIMEOUT_MS, '180000')
+  assert.match(result.summary, /policy: verifier/)
+  assert.equal(detectorEnvironment({}, { PG_DETECTOR_CANDIDATE_POLICY: 'verifier' }).env.PG_READINESS_TIMEOUT_MS, '180000')
 })
 
 test('unknown names, all-off and bad numbers are refused', () => {
