@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import os
 import re
 import threading
 from bisect import bisect_left
@@ -16,6 +15,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .. import settings
 from ..adapter import DetectorAdapter, RawFinding
 from ..core import BENIGN_VARIABLES, pem_body_lines
 from ..filters import CLOSED_CALL, assignment_value_is_code, lookup_default_is_value, lookup_key
@@ -96,8 +96,8 @@ SQL_PASSWORD = [re.compile(rf"(?i){prefix}{SQL_LITERAL}") for prefix in (
     r"\bSET\s+PASSWORD\b[^;\n]*?=\s*(?:PASSWORD\s*\(\s*)?",                         # MySQL SET PASSWORD ... = '...'
 )]
 SQL_MIN_LENGTH = 3  # SQL's own syntax is the context
-# PG_RULE_HEX_KEY=on (default off): a 32-64 character hex value quoted next to a key name. Off by default because a
-# git SHA or an md5 has the same shape; names that hold such digests are excluded.
+# PG_RULE_HEX_KEY (default on since release/defaults-1120; off turns it off): a 32-64 character hex value quoted next
+# to a key name. A git SHA or an md5 has the same shape; names that hold such digests are excluded.
 HEX_KEY = re.compile(
     r"(?<![A-Za-z0-9_])(?P<key>[A-Za-z_][A-Za-z0-9_.-]{0,63})[\"']?[ \t]*(?::=|=>|[:=])[ \t]*"
     r"(?:[A-Za-z_][\w.]*\([ \t]*)?(?P<quote>[\"'`])(?P<value>[0-9a-fA-F]{32,64})(?P=quote)"
@@ -197,13 +197,13 @@ class PatternAdapter(DetectorAdapter):
     def __init__(self, name: str, options: Mapping[str, Any], config_dir: Path) -> None:
         super().__init__(name, options, config_dir)
         self.min_value_length = int(options.get("min_value_length", 8))
-        # PG_DETECTOR_FILTERS=on: secret-assignment skips a value that is a reference, a call, code or a template,
+        # PG_DETECTOR_FILTERS (default on): secret-assignment skips a value that is a reference, a call, code or a template,
         # and counts it by reason for the ensemble (declined), per text of this thread's batch.
-        self.skip_code_values = os.environ.get("PG_DETECTOR_FILTERS") == "on"
+        self.skip_code_values = settings.enabled("PG_DETECTOR_FILTERS")
         # PG_DETECTOR_FILTER_DUMMY=on: a lookup default that is a placeholder (<password>) is not a candidate.
-        self.dummy_on = os.environ.get("PG_DETECTOR_FILTER_DUMMY") == "on"
+        self.dummy_on = settings.enabled("PG_DETECTOR_FILTER_DUMMY")
         self._batch = threading.local()
-        self.hex_key = os.environ.get("PG_RULE_HEX_KEY") == "on"
+        self.hex_key = settings.enabled("PG_RULE_HEX_KEY")
 
     def scan_many(self, texts: Sequence[str]) -> list[list[RawFinding]]:
         self._batch.declined = []

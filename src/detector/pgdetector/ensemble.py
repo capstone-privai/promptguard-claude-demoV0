@@ -17,15 +17,15 @@ from typing import Any, Mapping, Sequence
 from .adapter import AdapterUnavailable, DetectorAdapter, RawFinding
 from .adapters import ADAPTER_TYPES
 from .consensus import ConsensusPolicy, vote
+from . import settings
 from .core import CANONICAL_TYPES, MAX_SPAN, normalize, value_hash
-from .filters import Filters, filter_settings
+from .filters import Filters, filter_settings, public_prefix_rows
 
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "detector.json"
 Ballots = dict[str, list[RawFinding]]
 CANDIDATE_POLICIES = ("union", "majority")
 PUBLIC_PREFIX_TABLE = Path(__file__).resolve().parents[3] / "docs" / "PLACEHOLDER_PUBLIC_PREFIXES.md"
-PUBLIC_PREFIX_ROW = re.compile(r"^\|\s*`([^`]+)`\s*\|\s*([A-Z][A-Z0-9_]*)\s*\|", re.M)
 
 
 def public_placeholder_pattern() -> re.Pattern[str] | None:
@@ -34,12 +34,9 @@ def public_placeholder_pattern() -> re.Pattern[str] | None:
     Rules see `API_KEY=sk_live_[STRIPE_SECRET_KEY_1]` as an assignment of a secret, so the Final Guard would block
     masked text and the Mod would mask it again. None (option off, or no table) leaves every span as it was.
     """
-    if os.environ.get("PG_PLACEHOLDER_PUBLIC_PREFIX") != "on":
+    if not settings.enabled("PG_PLACEHOLDER_PUBLIC_PREFIX"):
         return None
-    try:
-        rows = PUBLIC_PREFIX_ROW.findall(PUBLIC_PREFIX_TABLE.read_text(encoding="utf-8"))
-    except OSError:
-        return None
+    rows = public_prefix_rows(PUBLIC_PREFIX_TABLE)
     return re.compile("|".join(rf"{re.escape(prefix)}\[{kind}_\d+\]" for prefix, kind in rows)) if rows else None
 
 
@@ -71,7 +68,7 @@ class Detector:
         self.skipped = [dict(item) for item in skipped]
         self.priority = {name: index for index, name in enumerate(names)}
         self.public_placeholder = public_placeholder_pattern()
-        # PG_DETECTOR_FILTERS / PG_DETECTOR_FILTER_DUMMY (filters.py): None when both are off, which changes nothing.
+        # PG_DETECTOR_FILTERS / PG_DETECTOR_FILTER_DUMMY (filters.py): None when both are off (FILTERS is on by default).
         self.filters = Filters.from_env()
         # The filter counts of the texts the current thread's last collect() saw, read by scan_many.
         self._filtered = threading.local()

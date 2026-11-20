@@ -17,8 +17,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from configs import CONFIGS, SETTINGS  # noqa: E402
-from instrument import install_boundary, install_recorder  # noqa: E402
+from configs import ALL_SETTINGS, CONFIGS  # noqa: E402
+from instrument import install_boundary, install_no_remask, install_recorder  # noqa: E402
 
 
 def run_folders(out: Path) -> set[Path]:
@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
     _, env, _ = CONFIGS[args.config]
-    for name in SETTINGS:
+    for name in ALL_SETTINGS:
         os.environ.pop(name, None)
     os.environ.update(env or {})
     root = args.data_root.resolve()
@@ -49,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     install_recorder(promptguard_adapter, rows)
     if (env or {}).get("PG_REMASK_SHORT") == "boundary":
         install_boundary(promptguard_adapter)
+    if (env or {}).get("PG_REMASK") == "off":
+        install_no_remask(promptguard_adapter)
     before = run_folders(out)
     scorer_args = ["run", "--system", "promptguard", "--system-root", str(args.system_root.resolve()),
                    "--sessions", str(args.sessions.resolve()), "--out", str(out)]

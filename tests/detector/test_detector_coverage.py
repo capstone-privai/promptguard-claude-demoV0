@@ -156,11 +156,15 @@ class HexKey(unittest.TestCase):
             with self.subTest(case=text.strip().split()[0][:16]):
                 self.assertIn((value, "hex-key"), rules(text, self.ON))
 
-    def test_off_by_default(self) -> None:
+    def test_on_by_default(self) -> None:
+        for text, value in self.cases():
+            with self.subTest(case=text.strip().split()[0][:16]):
+                self.assertIn((value, "hex-key"), rules(text))
+
+    def test_off_turns_it_off(self) -> None:
         for text, _ in self.cases():
-            for env in (None, {"PG_RULE_HEX_KEY": "off"}):
-                with self.subTest(case=text.strip().split()[0][:16], env=bool(env)):
-                    self.assertEqual([f for f in rules(text, env) if f[1] == "hex-key"], [])
+            with self.subTest(case=text.strip().split()[0][:16]):
+                self.assertEqual([f for f in rules(text, {"PG_RULE_HEX_KEY": "off"}) if f[1] == "hex-key"], [])
 
     def test_counter_cases(self) -> None:
         value = hexval(40)

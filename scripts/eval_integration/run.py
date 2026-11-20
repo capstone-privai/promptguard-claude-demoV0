@@ -1,4 +1,4 @@
-"""Integration measurement: the seven configurations of configs.py in one go, one table (report.py).
+"""Integration measurement: the eight configurations of configs.py in one go, one table (report.py).
 
 Run from anywhere; the scorer is promptguard-data's metric-detection (creddata-trajectory-data branch: covered recall,
 character precision, F2, per_finding.jsonl). promptguard-data is only read.
@@ -8,9 +8,9 @@ character precision, F2, per_finding.jsonl). promptguard-data is only read.
         --nine metric-detection/data_test/sessions_from_*.jsonl \\
         --out runs/eval-integration-1118 [--jobs 2] [--gitleaks ../tools/gitleaks-8.30.1]
 
-- CredData-trajectory test (--creddata): all seven configurations.
-- The nine sets (--nine): configurations 1 and 7 only.
-- Real traffic (--traffic, default the --nine files named openhands-feedback and SWE-Gym): all seven, for the
+- CredData-trajectory test (--creddata): all eight configurations.
+- The nine sets (--nine): configurations 1, 7 and 8 only (configs.ALL_SETS).
+- Real traffic (--traffic, default the --nine files named openhands-feedback and SWE-Gym): all eight, for the
   false positives per 1,000 lines column.
 - Configuration 1 runs main 668c2c1 from a detached worktree (--main-root, made under --out when not given).
 Finished runs are kept and skipped on the next call (--force runs them again). Relative paths are taken from
@@ -29,7 +29,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs import CONFIGS, MAIN_COMMIT  # noqa: E402
+from configs import ALL_SETS, CONFIGS, MAIN_COMMIT  # noqa: E402
 
 BRANCH_ROOT = HERE.parents[1]
 TRAFFIC_NAMES = ("openhands-feedback", "SWE-Gym")
@@ -82,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
 
     jobs: list[tuple[str, Path]] = []
     for config in args.configs:
-        sets = [creddata] + [p for p in nine if config in ("1-main", "7-all") or p in traffic]
+        sets = [creddata] + [p for p in nine if config in ALL_SETS or p in traffic]
         jobs += [(config, p) for p in dict.fromkeys(sets)]
     if not args.report_only:
         main_root = main_worktree(out, args.main_root) if "1-main" in args.configs else None

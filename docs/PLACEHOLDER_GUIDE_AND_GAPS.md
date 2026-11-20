@@ -106,7 +106,7 @@ node src/launcher/system-prompt.cjs --detector-url http://127.0.0.1:PORT --seed-
 
 이 두 빈틈은 보안 수정이라 설정 없이 항상 켜져 있다.
 
-## `PG_PLACEHOLDER_GUIDE=on|off` (기본 off): 자리표시자 안내
+## `PG_PLACEHOLDER_GUIDE=on|off` (기본 on, release/defaults-1120부터): 자리표시자 안내
 
 켜면 `prompt.compose` 훅이 시스템 프롬프트 끝에 짧은 안내(`promptguard:placeholder-guide`, scope `session`)를 붙인다.
 
@@ -131,7 +131,7 @@ node src/launcher/system-prompt.cjs --detector-url http://127.0.0.1:PORT --seed-
 
 **한계:** `--system-prompt`를 쓰면 `prompt.compose`가 불리지 않아 안내문도 들어가지 않는다.
 
-## `PG_RESTORE_ESCAPED=on|off` (기본 off): 이스케이프 복원
+## `PG_RESTORE_ESCAPED=on|off` (기본 on, release/defaults-1120부터): 이스케이프 복원
 
 정규식으로 이스케이프한 자리표시자 `\[TYPE_N\]`을, 같은 정규식 문법으로 이스케이프한 실제 값으로 복원한다.
 

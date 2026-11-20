@@ -1,17 +1,25 @@
-"""scripts/eval_integration/report.py helpers on synthetic rows: shapes, character overlap, newly missed, tiers."""
+"""scripts/eval_integration/report.py helpers on synthetic rows: shapes, character overlap, newly missed, tiers, the
+re-mask-only count of configuration 8 and the re-mask false positives by catcher; and one report built from synthetic
+run folders, which must hold no value."""
 
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
+import types
 import unittest
 from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "eval_integration"))
+sys.path.insert(0, str(ROOT / "src" / "detector"))
 
+import instrument  # noqa: E402
 import report  # noqa: E402
-from configs import BASELINE, CONFIGS, SETTINGS  # noqa: E402
+from configs import ALL_SETS, BASELINE, CONFIGS, NEW_DEFAULTS, REMASK, SETTINGS  # noqa: E402
+from pgdetector import settings as detector_settings  # noqa: E402
 
 
 class Configs(unittest.TestCase):
@@ -24,6 +32,124 @@ class Configs(unittest.TestCase):
             self.assertEqual(BASELINE[name], "2-off")
         self.assertEqual({k for k in SETTINGS if CONFIGS["7-all"][1][k] == off[k]}, set())
         self.assertIsNone(CONFIGS["1-main"][1])
+
+    def test_two_to_seven_keep_the_re_mask_on(self) -> None:
+        for name in ("2-off", "3-filters", "4-filters-dummy", "5-floor", "6-hex", "7-all"):
+            self.assertEqual(CONFIGS[name][1][REMASK], "on", name)
+
+    def test_eight_is_the_new_defaults_with_the_re_mask_off(self) -> None:
+        env = CONFIGS["8-defaults-no-remask"][1]
+        self.assertEqual(env, {**NEW_DEFAULTS, REMASK: "off"})
+        self.assertEqual(set(env), set(SETTINGS) | {REMASK}, "every setting given")
+        for name, value in detector_settings.DEFAULTS.items():
+            if name in NEW_DEFAULTS:
+                self.assertEqual(NEW_DEFAULTS[name], value, name)
+        self.assertEqual(BASELINE["8-defaults-no-remask"], "7-all")
+        self.assertIn("8-defaults-no-remask", ALL_SETS)
+
+
+class NoRemask(unittest.TestCase):
+    def test_the_session_still_fills_its_map_and_does_not_re_mask(self) -> None:
+        class ModSession:
+            def __init__(self) -> None:
+                self.reverse = {}
+
+            def _remask(self, text, out, edits):
+                return out.replace("SynthValue9q", "[X_1]"), edits + ["remask"]
+
+        module = types.SimpleNamespace(ModSession=ModSession)
+        instrument.install_no_remask(module)
+        session = module.ModSession()
+        session.reverse["SynthValue9q"] = "[X_1]"
+        self.assertEqual(session._remask("t", "a SynthValue9q", ["detector"]), ("a SynthValue9q", ["detector"]))
+        self.assertEqual(session.reverse, {"SynthValue9q": "[X_1]"})
+
+
+class RemaskOnly(unittest.TestCase):
+    def test_covered_by_seven_and_not_by_eight(self) -> None:
+        gold = [{"session_id": "s", "item_id": 1, "span_id": i, "start": i, "end": i + 1} for i in range(4)]
+        values = ["SynthA9q", "SynthA9q", "SynthB9q", "SynthC9q"]
+        seven = {"gold": gold, "covered": {("s", 1, 0), ("s", 1, 1), ("s", 1, 2)}, "value_of": lambda r: values[r["span_id"]]}
+        eight = {"gold": gold, "covered": {("s", 1, 2), ("s", 1, 3)}}
+        self.assertEqual(report.remask_only(seven, eight), (2, 1))
+
+
+class RemaskByCatcher(unittest.TestCase):
+    def test_the_first_finding_of_the_value_names_the_catcher(self) -> None:
+        texts = {("s", 1): "pw=SynthA9q", ("s", 2): "x SynthA9q", ("s", 3): "y SynthA9q SynthB9q", ("t", 1): "z SynthB9q"}
+
+        def finding(session: str, item: int, start: int, end: int, adapter: str, rule: str) -> dict:
+            return {"session_id": session, "item_id": item, "start": start, "end": end, "adapter": adapter, "rule_id": rule}
+
+        def edit(session: str, item: int, start: int, end: int) -> dict:
+            return {"session_id": session, "item_id": item, "start": start, "end": end}
+
+        run = {
+            "value_of": lambda r: texts[(r["session_id"], r["item_id"])][r["start"]:r["end"]],
+            # the value's first finding (item 1) is by two rules at the same place; a later one (item 3) does not count
+            "all_findings": [finding("s", 1, 3, 11, "promptguard-rules", "secret-assignment"), finding("s", 1, 3, 11, "credsweeper", "Password"),
+                             finding("s", 3, 2, 10, "shell-aware", "function_argument")],
+            # the second value has no finding in its session t
+            "remask_fp_edits": [edit("s", 2, 2, 10), edit("s", 3, 2, 10), edit("t", 1, 2, 10)],
+        }
+        distinct, spans, values = report.remask_fp_by_catcher(run)
+        both = "credsweeper:Password, promptguard-rules:secret-assignment"
+        self.assertEqual(distinct, 2)
+        self.assertEqual(spans, Counter({both: 2, report.NO_CATCHER: 1}))
+        self.assertEqual(values, Counter({both: 1, report.NO_CATCHER: 1}))
+
+
+class BuildFromSyntheticRuns(unittest.TestCase):
+    """report.build over synthetic run folders of 7 and 8: the new column and table, and no value in the report."""
+
+    SECRET = "SynthGold9qValue"
+    NOISE = "SynthNoise7x"
+
+    @staticmethod
+    def rows(items: list[dict]) -> str:
+        return "".join(json.dumps(item) + "\n" for item in items)
+
+    def write_run(self, out: Path, config: str, sessions: Path, edits: list[dict], spans: list[dict], first: str) -> None:
+        run = out / config / "cred" / "run1"
+        run.mkdir(parents=True)
+        (run / "run_meta.json").write_text(json.dumps({"dataset": {"sessions_path": str(sessions)}}), encoding="utf-8")
+        (run / "metrics.json").write_text(json.dumps({"fp_per_1k_lines": 0.0}), encoding="utf-8")
+        (run / "eval_config.json").write_text(json.dumps({"config": config}), encoding="utf-8")
+        (run / "per_span.jsonl").write_text(self.rows(spans), encoding="utf-8")
+        (run / "per_edit.jsonl").write_text(self.rows(edits), encoding="utf-8")
+        found = {"session_id": "s", "item_id": 0, "start": 3, "end": 3 + len(self.SECRET), "valid": True, "scored": True, "adapter": "promptguard-rules",
+                 "rule_id": "secret-assignment", "confidence": "moderate", "overlaps_gold": True, "gold_span_ids": [0]}
+        noise = {**found, "start": first.index(self.NOISE), "end": len(first), "rule_id": "hex-key", "overlaps_gold": False, "gold_span_ids": []}
+        (run / "per_finding.jsonl").write_text(self.rows([found, noise]), encoding="utf-8")
+        (run / "filters.jsonl").write_text(self.rows([{"session_id": "s", "item_id": 0, "filtered": {}, "removed": []}]), encoding="utf-8")
+
+    def test_report(self) -> None:
+        first, later = f"pw={self.SECRET} k={self.NOISE}", f"echo {self.SECRET} {self.NOISE}"
+
+        def gold(status: str) -> list[dict]:
+            return [{"session_id": "s", "item_id": 0, "span_id": 0, "start": 3, "end": 3 + len(self.SECRET), "scored": True, "status": "exact", "type": "PASSWORD"},
+                    {"session_id": "s", "item_id": 1, "span_id": 1, "start": 5, "end": 5 + len(self.SECRET), "scored": True, "status": status, "type": "PASSWORD"}]
+
+        def edit(item: int, start: int, end: int, overlaps_gold: bool) -> dict:
+            return {"session_id": "s", "item_id": item, "start": start, "end": end, "scored": True, "overlaps_gold": overlaps_gold}
+
+        detector_edits = [edit(0, 3, 3 + len(self.SECRET), True), edit(0, first.index(self.NOISE), len(first), False)]
+        remask_edits = [edit(1, 5, 5 + len(self.SECRET), True), edit(1, later.index(self.NOISE), len(later), False)]
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder)
+            sessions = out / "sessions_from_cred.jsonl"
+            sessions.write_text(json.dumps({"session_id": "s", "items": [{"item_id": 0, "text": first}, {"item_id": 1, "text": later}]}) + "\n", encoding="utf-8")
+            self.write_run(out, "7-all", sessions, detector_edits + remask_edits, gold("exact"), first)
+            self.write_run(out, "8-defaults-no-remask", sessions, detector_edits, gold("missed"), first)
+            manifest = {"creddata": "cred", "nine": [], "traffic": [], "configs": ["7-all", "8-defaults-no-remask"]}
+            (out / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            text = report.build(out, out, ROOT).read_text(encoding="utf-8")
+        self.assertNotIn(self.SECRET, text)
+        self.assertNotIn(self.NOISE, text)
+        row = next(line for line in text.splitlines() if line.startswith("| 8-defaults-no-remask"))
+        self.assertTrue(row.rstrip().endswith("| 1 / 1 |"), "re-mask only: one span, one value")
+        self.assertIn("재마스킹 오탐 1개, 고유 값 1개", text)
+        self.assertIn("| promptguard-rules:hex-key | 1 | 1 |", text)
 
 
 class Helpers(unittest.TestCase):

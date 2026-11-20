@@ -83,7 +83,7 @@ test('a seed file that cannot be read blocks (fail-closed), since numbers could 
 // ---- placeholder guide
 
 test('guide on: one section in every composed system prompt, naming the restore tools exactly', async () => {
-  const { hooks, $ } = await load({ PG_PLACEHOLDER_GUIDE: 'on' })
+  const { hooks, $ } = await load({ PG_PLACEHOLDER_GUIDE: 'on', PG_RESTORE_ESCAPED: 'off' })
   for (let round = 0; round < 2; round++) {
     const { sections } = await compose(hooks, $)
     const guides = sections.filter(section => section.id === 'promptguard:placeholder-guide')
@@ -105,8 +105,17 @@ test('guide mentions escaped placeholders only with PG_RESTORE_ESCAPED=on', asyn
   assert.ok(guide.text.includes('\\[TYPE_N\\]'))
 })
 
-test('guide off (default): the composed prompt is unchanged', async () => {
-  for (const value of [null, 'off']) {
+test('guide on by default (unset or empty), with the escaped form since PG_RESTORE_ESCAPED is on by default too', async () => {
+  for (const value of [null, '']) {
+    const { hooks, $ } = await load({ PG_PLACEHOLDER_GUIDE: value, PG_RESTORE_ESCAPED: value })
+    const { sections } = await compose(hooks, $)
+    assert.deepEqual(sections.map(section => section.id), ['intro', 'promptguard:placeholder-guide'], JSON.stringify(value))
+    assert.ok(sections.at(-1).text.includes('\\[TYPE_N\\]'))
+  }
+})
+
+test('guide off: the composed prompt is unchanged', async () => {
+  for (const value of ['off', 'no']) {
     const { hooks, $ } = await load({ PG_PLACEHOLDER_GUIDE: value })
     assert.deepEqual((await compose(hooks, $)).sections.map(section => section.id), ['intro'])
   }
@@ -118,8 +127,14 @@ const ESCAPED = '\\[TOKEN_1\\]'
 const REGEX_ESCAPED = 'SYNTHtok\\.en\\$x7Qk2/m\\+R9' // ERE/rg: . $ + escaped
 const BRE_ESCAPED = 'SYNTHtok\\.en\\$x7Qk2/m+R9' // BRE: + is literal
 
-test('escaped restore off (default): \\[TOKEN_1\\] stays as written', async () => {
+test('escaped restore on by default: the Grep pattern gets the regex-escaped value', async () => {
   const { hooks, $ } = await load()
+  await read(hooks, $, `TOKEN=${TOKEN}`)
+  assert.equal((await run(hooks, $, { tool: 'Grep', pattern: ESCAPED })).pattern, REGEX_ESCAPED)
+})
+
+test('escaped restore off: \\[TOKEN_1\\] stays as written', async () => {
+  const { hooks, $ } = await load({ PG_RESTORE_ESCAPED: 'off' })
   await read(hooks, $, `TOKEN=${TOKEN}`)
   assert.equal((await run(hooks, $, { tool: 'Grep', pattern: ESCAPED })).pattern, ESCAPED)
   assert.equal((await run(hooks, $, { tool: 'Bash', command: `grep '${ESCAPED}' app.log` })).command, `grep '${ESCAPED}' app.log`)
