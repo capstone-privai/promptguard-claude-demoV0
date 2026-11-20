@@ -7,7 +7,9 @@ import json
 import os
 import re
 import sys
+import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -15,14 +17,15 @@ from typing import Any, Mapping, Sequence
 from .adapter import AdapterUnavailable, DetectorAdapter, RawFinding
 from .adapters import ADAPTER_TYPES
 from .consensus import ConsensusPolicy, vote
+from . import settings
 from .core import CANONICAL_TYPES, MAX_SPAN, normalize, value_hash
+from .filters import Filters, filter_settings, public_prefix_rows
 
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "detector.json"
 Ballots = dict[str, list[RawFinding]]
 CANDIDATE_POLICIES = ("union", "majority")
 PUBLIC_PREFIX_TABLE = Path(__file__).resolve().parents[3] / "docs" / "PLACEHOLDER_PUBLIC_PREFIXES.md"
-PUBLIC_PREFIX_ROW = re.compile(r"^\|\s*`([^`]+)`\s*\|\s*([A-Z][A-Z0-9_]*)\s*\|", re.M)
 
 
 def public_placeholder_pattern() -> re.Pattern[str] | None:
@@ -31,12 +34,9 @@ def public_placeholder_pattern() -> re.Pattern[str] | None:
     Rules see `API_KEY=sk_live_[STRIPE_SECRET_KEY_1]` as an assignment of a secret, so the Final Guard would block
     masked text and the Mod would mask it again. None (option off, or no table) leaves every span as it was.
     """
-    if os.environ.get("PG_PLACEHOLDER_PUBLIC_PREFIX") != "on":
+    if not settings.enabled("PG_PLACEHOLDER_PUBLIC_PREFIX"):
         return None
-    try:
-        rows = PUBLIC_PREFIX_ROW.findall(PUBLIC_PREFIX_TABLE.read_text(encoding="utf-8"))
-    except OSError:
-        return None
+    rows = public_prefix_rows(PUBLIC_PREFIX_TABLE)
     return re.compile("|".join(rf"{re.escape(prefix)}\[{kind}_\d+\]" for prefix, kind in rows)) if rows else None
 
 
@@ -68,6 +68,10 @@ class Detector:
         self.skipped = [dict(item) for item in skipped]
         self.priority = {name: index for index, name in enumerate(names)}
         self.public_placeholder = public_placeholder_pattern()
+        # PG_DETECTOR_FILTERS / PG_DETECTOR_FILTER_DUMMY (filters.py): None when both are off (FILTERS is on by default).
+        self.filters = Filters.from_env()
+        # The filter counts of the texts the current thread's last collect() saw, read by scan_many.
+        self._filtered = threading.local()
 
     @property
     def names(self) -> list[str]:
@@ -86,32 +90,45 @@ class Detector:
             "candidate_adapters": self.names,
             "candidate_only_adapters": sorted(self.candidate_only),
             "skipped": self.skipped,
+            **(self.filters.describe() if self.filters else {}),
+            "filter_settings": filter_settings(),
         }
 
     def collect(self, texts: Sequence[str]) -> tuple[list[Ballots], list[str]]:
         """Every adapter's findings for every text, plus adapter failure codes."""
 
-        def run(adapter: DetectorAdapter) -> tuple[list[list[RawFinding]], str | None]:
+        def run(adapter: DetectorAdapter) -> tuple[list[list[RawFinding]], str | None, list[Mapping[str, int]] | None]:
             try:
                 ballots = adapter.scan_many(texts)
                 if len(ballots) != len(texts):
                     raise RuntimeError("ballot count mismatch")
-                return ballots, None
+                # Read in the thread that scanned: what the adapter itself declined, per text (counts only).
+                return ballots, None, adapter.declined()
             except Exception as exc:
                 # Exception text may quote the scanned input, so only the type is logged.
                 print(f"PromptGuard detector: adapter {adapter.name!r} failed ({type(exc).__name__})", file=sys.stderr, flush=True)
-                return [[] for _ in texts], f"ADAPTER_FAILURE:{adapter.name}"
+                return [[] for _ in texts], f"ADAPTER_FAILURE:{adapter.name}", None
 
         if len(self.adapters) == 1:
             results = [run(self.adapters[0])]
         else:
             with ThreadPoolExecutor(max_workers=len(self.adapters), thread_name_prefix="pg-adapter") as pool:
                 results = list(pool.map(run, self.adapters))
-        errors = sorted({error for _, error in results if error})
+        errors = sorted({error for _, error, _ in results if error})
         per_text = [
-            {adapter.name: ballots[index] for adapter, (ballots, _) in zip(self.adapters, results)}
+            {adapter.name: ballots[index] for adapter, (ballots, _, _) in zip(self.adapters, results)}
             for index in range(len(texts))
         ]
+        # Before any vote or merge, so every adapter's findings are filtered alike and callers that record
+        # collect() (promptguard-data's scorer) see what the ensemble used.
+        counts: list[Counter] = [Counter() for _ in texts]
+        if self.filters:
+            for _, _, declined in results:
+                for index, declined_here in enumerate(declined or []):
+                    counts[index].update(declined_here)
+            for index, text in enumerate(texts):
+                per_text[index] = {name: self.filters.apply(name, found, text, counts[index]) for name, found in per_text[index].items()}
+        self._filtered.counts = counts
         return per_text, errors
 
     def accept(self, text: str, ballots: Mapping[str, Sequence[RawFinding]], required_votes: int | None = None, *, candidate_scope: bool = False, include_evidence: bool = False) -> tuple[list[dict[str, Any]], list[str]]:
@@ -172,6 +189,7 @@ class Detector:
 
         texts = [text for text, _ in items]
         per_text, adapter_errors = self.collect(texts)
+        filtered = getattr(self._filtered, "counts", None) or [Counter() for _ in texts]
         decided = []
         for (text, source), ballots in zip(items, per_text):
             raw, errors = self.accept(text, ballots)
@@ -182,7 +200,7 @@ class Detector:
             if mode == "unicode_mismatch":
                 for finding in findings:
                     finding["offset_unit"] = "code_points"
-            decided.append((findings, candidates, sorted(set(adapter_errors + errors + normalize_errors + candidate_errors))))
+            decided.append((findings, candidates, sorted(set(adapter_errors + errors + normalize_errors + candidate_errors)), filtered[len(decided)]))
 
         # Adapters scan the batch together, so latency is the batch wall time.
         elapsed = round((time.perf_counter() - started) * 1000, 3)
@@ -199,7 +217,9 @@ class Detector:
             "required_votes": self.required_votes,
             "adapters": self.names,
             "candidate_policy": self.candidate_policy,
-        } for findings, candidates, errors in decided]
+            # Counts per filter name only, never values; absent when the filters are off.
+            **({"filtered": dict(sorted(counts.items()))} if self.filters else {}),
+        } for findings, candidates, errors, counts in decided]
 
     def scan(self, text: str, source: str) -> dict[str, Any]:
         return self.scan_many([(text, source)])[0]
