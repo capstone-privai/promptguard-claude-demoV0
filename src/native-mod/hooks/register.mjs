@@ -21,6 +21,12 @@ const DEFAULTS = Object.freeze({
   // "boundary" or "substring" (the behaviour before release/defaults-1120).
   PG_REMASK_SHORT: 'boundary',
   PG_PLACEHOLDER_GUIDE: 'on',
+  // on: a Bash command that reads a secret-looking path through a transform or dump tool gets its whole output
+  // replaced by SECRET_DUMP_NOTICE (secretDumpTool).
+  PG_SECRET_DUMP_GUARD: 'on',
+  // on: before a Bash command that names a secret-looking path, a small one-line file's trimmed content goes into the
+  // vault, so it is re-masked wherever it shows up later, even where the detector misses it. Off until measured.
+  PG_SECRET_FILE_PRELOAD: 'off',
   PG_RESTORE_ESCAPED: 'on',
   PG_PLACEHOLDER_PUBLIC_PREFIX: 'off',
 })
@@ -74,6 +80,10 @@ function typeName(value) {
 function placeholder(finding, raw) {
   const key = finding.value_hash
   if (ledger.has(key)) return ledger.get(key)
+  if (reverseVault.has(raw)) {
+    ledger.set(key, reverseVault.get(raw))
+    return reverseVault.get(raw)
+  }
   const known = publicEntry(raw)
   const kind = known ? known.type : typeName(finding.type)
   const next = (counters.get(kind) || 0) + 1
@@ -276,8 +286,166 @@ function placeholderGuide(escaped) {
     'Do not ask the user for the value again, and do not report that a file contains a placeholder or a fake string.',
     'If you need a property of the value (its length, a character it contains), check it with a local command that uses',
     'the placeholder, and do not print the value.',
+    'Do not print a secret file or a hidden value through od, xxd, hexdump or base64, by splitting it into characters, or by',
+    'cutting out a part of it. If you need a property such as whether it contains a special character or its length, check',
+    "it with a command that does not print the value (for example grep -c '[$]' FILE, or python printing only the result of a condition).",
   ].join(' ')
 }
+
+// ---- PG_SECRET_DUMP_GUARD (default on) and PG_SECRET_FILE_PRELOAD (default off)
+//
+// metric-task g16, g20 (gold) and g16, t14 (promptguard): the model ran od -c on secrets/db_password.txt to see the
+// exact bytes. od prints a character at a time with offsets, so no detector found the value, it never entered the
+// vault, the model read it and wrote it raw into an Edit, and that went to the server with the history. Output
+// formats are endless, so the guard does not parse them: a Bash pipeline that names a secret-looking path and runs a
+// transform or dump tool has its whole output replaced by one notice. A plain read (cat, Read) keeps the detector and
+// placeholder path. Heuristic on the command text: a path built from a variable, $( ), a glob or a link, a cd before a
+// relative path, and tools other than Bash are not seen (docs/SECRET_DUMP_GUARD.md).
+const SECRET_DUMP_NOTICE = '[PROMPTGUARD: 비밀 파일을 변형해 출력한 결과라 가렸습니다. 값은 placeholder로 다루고, 속성은 값을 출력하지 않는 명령으로 확인하세요]'
+const SECRET_FILE_NAME = /secret|password|passwd|credential|token/i
+const SECRET_EXACT_NAMES = new Set(['.env', '.netrc', '.npmrc', '.pypirc'])
+const DUMP_COMMANDS = new Set(['od', 'xxd', 'hexdump', 'hd', 'base64', 'base32', 'basenc', 'fold', 'rev'])
+const COMMAND_WRAPPERS = new Set(['sudo', 'env', 'nice', 'time', 'command', 'exec', 'nohup', 'stdbuf'])
+// Code of an interpreter that prints a value a character (or a byte) at a time, or encoded.
+const CHAR_CODE = {
+  awk: /split\([^)]*,\s*""\s*\)|substr\([^,]+,\s*\w+\s*,\s*1\s*\)/,
+  python: /\blist\(|\bord\(|\[::|\.hex\(|hexlify|b64encode|b32encode|b16encode|\bbytes\(|\brepr\(|\.join\(|\.encode\(/,
+  node: /split\(\s*(['"`])\1\s*\)|charCodeAt|codePointAt|\[\s*\.\.\.|Array\.from\(|toString\(\s*['"](?:hex|base64)|\.join\(/,
+  perl: /split\s*\(?\s*\/\/|\bunpack\b|\bord\b|\bsprintf\b|\bjoin\b/,
+}
+const INTERPRETERS = { awk: 'awk', gawk: 'awk', mawk: 'awk', python: 'python', python3: 'python', py: 'python', node: 'node', deno: 'node', bun: 'node', perl: 'perl', ruby: 'perl' }
+
+function secretPath(path) {
+  const parts = path.split(/[\\/]/)
+  const base = parts.at(-1)
+  // secrets/ itself too: secrets/* and $(ls secrets/*) read what is in it.
+  if (parts.slice(0, -1).some(part => part.toLowerCase() === 'secrets')) return true
+  if (!base) return false
+  if (SECRET_EXACT_NAMES.has(base) || base.startsWith('.env.')) return true
+  if (/^id_(?:rsa|ed25519)/.test(base) || /\.(?:pem|key)$/i.test(base)) return true
+  return SECRET_FILE_NAME.test(base)
+}
+
+// The words of one segment, quotes removed.
+function segmentWords(command, quote, start, end) {
+  const words = []
+  let word = ''
+  for (let i = start; i < end; i++) {
+    if (quote[i] === 'n' && /\s/.test(command[i])) { if (word) words.push(word); word = ''; continue }
+    if (quote[i] === 'n' && (command[i] === "'" || command[i] === '"')) continue
+    if (quote[i] === 's' && command[i] === "'") continue
+    if (quote[i] === 'd' && command[i] === '"' && command[i - 1] !== '\\') continue
+    word += command[i]
+  }
+  if (word) words.push(word)
+  return words
+}
+
+// Secret-looking paths a segment names: an argument word as a whole, and inside code (python -c "...open('x')...")
+// a path-shaped piece (with / or an extension), so a variable named tokens is not taken for a file.
+function segmentSecretPaths(words, at) {
+  const out = []
+  words.forEach((word, index) => {
+    if (index === at) return
+    const value = word.startsWith('-') ? (word.includes('=') ? word.slice(word.indexOf('=') + 1) : '') : word.replace(/^[<>]+/, '')
+    if (!value) return
+    if (/^[\w.~\/\\:-]+$/.test(value)) {
+      if (secretPath(value)) out.push(value)
+      return
+    }
+    for (const piece of value.match(/[\w.~\/\\-]+/g) || []) {
+      if (/[\/\\]|\.[A-Za-z0-9]+$/.test(piece) && secretPath(piece)) out.push(piece)
+    }
+  })
+  return out
+}
+
+// The dump tool a segment runs, or null.
+function segmentDumpTool(words, at) {
+  const name = (words[at] || '').split(/[\\/]/).pop().replace(/\.exe$/i, '')
+  const args = words.slice(at + 1)
+  if (DUMP_COMMANDS.has(name)) return name
+  if (name === 'cut' && args.some(arg => /^-[a-z]*c/.test(arg) || arg.startsWith('--characters'))) return 'cut'
+  if (name === 'sed' && args.some(arg => /s(.)(?:\.|\\?\(\.\\?\))\1/.test(arg))) return 'sed'
+  const family = INTERPRETERS[name]
+  if (family && args.some(arg => CHAR_CODE[family].test(arg))) return name
+  return null
+}
+
+// { tool, paths }: tool is the dump tool of the first pipeline that names a secret-looking path and runs one (null when
+// none does); paths are every secret-looking path the command names (for the preload).
+function secretDumpTool(command) {
+  if (typeof command !== 'string' || !command) return { tool: null, paths: [] }
+  const { quote, segments } = shellLayout(command)
+  const pipelines = [[]]
+  segments.forEach(([start, end], index) => {
+    const words = segmentWords(command, quote, start, end)
+    let at = 0
+    while (at < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[at]) || COMMAND_WRAPPERS.has(words[at]))) at++
+    pipelines.at(-1).push({ paths: segmentSecretPaths(words, at), tool: segmentDumpTool(words, at) })
+    const pipe = command[end] === '|' && command[end + 1] !== '|' && command[end - 1] !== '|'
+    if (!pipe && index < segments.length - 1) pipelines.push([])
+  })
+  let tool = null
+  for (const pipeline of pipelines) {
+    if (tool) break
+    if (pipeline.some(segment => segment.paths.length)) tool = pipeline.find(segment => segment.tool)?.tool ?? null
+  }
+  return { tool, paths: [...new Set(pipelines.flat().flatMap(segment => segment.paths))] }
+}
+
+// The whole output of a guarded command: the notice as stdout, every other text field empty.
+function guardedResult(result) {
+  const out = { ...result }
+  if (out.result && typeof out.result === 'object') {
+    out.result = Object.fromEntries(Object.entries(out.result).map(([key, value]) => [key, typeof value === 'string' ? '' : value]))
+    out.result.stdout = SECRET_DUMP_NOTICE
+  } else if (typeof out.result === 'string') out.result = SECRET_DUMP_NOTICE
+  if (out.text !== undefined) out.text = SECRET_DUMP_NOTICE
+  return out
+}
+
+const PRELOAD_MAX_BYTES = 256
+const PRELOAD_MIN_CHARS = 8
+const preloaded = new Set()
+
+function preloadType(path) {
+  const base = path.split(/[\\/]/).pop()
+  if (/password|passwd|pwd/i.test(base)) return 'PASSWORD'
+  if (/token/i.test(base)) return 'TOKEN'
+  return 'SECRET'
+}
+
+// A small one-line secret file's trimmed content into the vault, before the command runs. Paths are read relative
+// to the session's working directory (not a cd inside the command); ~ is not expanded. Anything unreadable is skipped.
+async function preloadSecretFiles($, paths) {
+  for (const path of paths) {
+    if (preloaded.has(path) || path.startsWith('~')) continue
+    preloaded.add(path)
+    try {
+      // The engine allows $ only as $.noun.event(...) at the call site, so stat is called, not tested for. A stat
+      // that fails (missing file, or an engine without it) leaves the decision to the read below.
+      let size = null
+      try {
+        const stat = await $.fs.stat(path)
+        if (stat.kind !== 'file') continue
+        size = stat.size
+      } catch { /* decided by the read */ }
+      if (size !== null && size > PRELOAD_MAX_BYTES) continue
+      const text = String(await $.fs.read(path))
+      if (new TextEncoder().encode(text).length > PRELOAD_MAX_BYTES) continue
+      const raw = text.trim()
+      if (raw.length < PRELOAD_MIN_CHARS || /[\r\n]/.test(raw) || /^\[[A-Z0-9_]+_\d+\]$/.test(raw) || reverseVault.has(raw)) continue
+      const kind = preloadType(path)
+      const next = (counters.get(kind) || 0) + 1
+      counters.set(kind, next)
+      const value = `[${kind}_${next}]`
+      vault.set(value, raw)
+      reverseVault.set(raw, value)
+    } catch { /* missing or unreadable: nothing to preload */ }
+  }
+}
+let secretDumpCount = 0
 
 // Replaces known raw values with their placeholders, even where the detector would miss them
 // (e.g. a restored password echoed alone on a line). Longest first so substrings never win.
@@ -554,6 +722,9 @@ async function appendAudit($, source, result, extra = {}) {
     hook: extra.hook,
     tool: auditTool(extra.tool),
     is_error: extra.is_error,
+    // secret_dump_guarded rows only: the dump tool's name and the session's running count, never a path or value.
+    dump_tool: extra.dump_tool,
+    secret_dump_count: extra.secret_dump_count,
   })
   auditQueue = auditQueue.then(() => $.fs.write(path, JSON.stringify(auditRows, null, 2))).catch(() => {})
   await auditQueue
@@ -694,6 +865,9 @@ export function register(on) {
     const { input, restoredCount } = restoreEnabled ? restoreToolInput(e, escaped) : { input: e, restoredCount: 0 }
     const lifecycle = { findingCount: null, types: {}, latencyMs: 0, findings: [] }
     const extra = { hook: 'tool.call', tool: e.tool, operation, restored_count: restoredCount }
+    const dump = e.tool === 'Bash' ? secretDumpTool(e.command) : { tool: null, paths: [] }
+    const dumpTool = dump.tool && setting('PG_SECRET_DUMP_GUARD', await $.env.get('PG_SECRET_DUMP_GUARD')) === 'on' ? dump.tool : null
+    if (dump.paths.length && setting('PG_SECRET_FILE_PRELOAD', await $.env.get('PG_SECRET_FILE_PRELOAD')) === 'on') await preloadSecretFiles($, dump.paths)
     await appendAudit($, toolSource(e, false), lifecycle, { ...extra, event: 'tool_started' })
     let result
     try { result = await next(input) }
@@ -705,6 +879,12 @@ export function register(on) {
       await appendAudit($, toolSource(e, false), lifecycle, { ...extra, event: 'tool_denied' })
       const deny = typeof result.deny === 'string' ? remaskText(result.deny, { count: 0 }) : result.deny
       return deny === result.deny ? result : { ...result, deny }
+    }
+    if (dumpTool) {
+      secretDumpCount++
+      await appendAudit($, toolSource(e, result.isError === true), lifecycle, { ...extra, event: 'secret_dump_guarded', is_error: result.isError === true, dump_tool: dumpTool, secret_dump_count: secretDumpCount })
+      if (result.isError === true) return { deny: SECRET_DUMP_NOTICE }
+      result = guardedResult(result)
     }
     const source = toolSource(e, result.isError === true)
     extra.is_error = result.isError === true

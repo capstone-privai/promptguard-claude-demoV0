@@ -20,3 +20,12 @@ test('every setting with a default is read by its literal name', () => {
     assert.ok(source.includes(`$.env.get('${name}')`), name)
   }
 })
+
+test('$ is only called: $.noun.event(...) at the call site, never read as a value', () => {
+  // 2.1.291 refused the hooks module for `typeof $.fs.stat === 'function'` (fix/secret-dump-guard).
+  const code = source.replace(/\/\/.*$/gm, '')
+  const VALUES = new Set(['$.plugin.root']) // properties the engine gives as values
+  const uses = [...code.matchAll(/\$\.[A-Za-z]+\.[A-Za-z]+(?!\w)(\s*\()?/g)]
+  assert.ok(uses.length > 0)
+  for (const use of uses.filter(u => !VALUES.has(u[0].trim()))) assert.ok(use[1], `${use[0].trim()} is not called`)
+})
