@@ -162,6 +162,7 @@ def numbers(run: Path, texts: Texts) -> dict[str, Any]:
         "removed": removed, "rules_over": rules_over, "findings": findings, "value_of": value_of,
         "remask_fp_edits": remask_fp_edits, "all_findings": valid,
         "scorer": (metrics.get("recall"), metrics.get("precision")),
+        "verifier": list(jsonl(run / "verifier.jsonl")),
     }
 
 
@@ -242,6 +243,25 @@ def remask_cell(runs: dict[tuple[str, str], dict[str, Any]], config: str, name: 
     return f"{spans} / {values}"
 
 
+def verifier_stats(run: dict[str, Any]) -> dict[str, int]:
+    """Configuration 9: ambiguous candidates the verifier masked / left, the left ones over a gold span this run does
+    not cover (newly missed by the verifier), and items whose verifier call timed out or failed (fail-closed)."""
+    uncovered: dict[tuple[str, int], list[tuple[int, int]]] = defaultdict(list)
+    for r in run["gold"]:
+        if (r["session_id"], r["item_id"], r["span_id"]) not in run["covered"]:
+            uncovered[(r["session_id"], r["item_id"])].append((r["start"], r["end"]))
+    out = Counter()
+    for row in run["verifier"]:
+        out["items"] += 1
+        out["timeout"] += row["timeout"]
+        out["fail_closed"] += row["failure"]
+        for c in row["ambiguous"]:
+            out["masked" if c["masked"] else "left"] += 1
+            if not c["masked"] and any(c["start"] < e and s < c["end"] for s, e in uncovered.get((row["session_id"], row["item_id"]), [])):
+                out["left_gold"] += 1
+    return out
+
+
 def fmt(value: Any) -> str:
     return "-" if value is None else f"{value:.4f}" if isinstance(value, float) else str(value)
 
@@ -259,13 +279,14 @@ def build(out: Path, main_root: Path, branch_root: Path) -> Path:
     cred = manifest["creddata"]
     traffic = manifest["traffic"]
     lines = ["# 통합 측정 (eval/integration-1118)", "",
-             f"- 데이터: CredData-trajectory `{cred}` (8개 설정), 기존 셋 {len(manifest['nine'])}개 (1·7·8번), 실제 트래픽 {', '.join(traffic) or '-'} (8개 설정)",
+             f"- 데이터: CredData-trajectory `{cred}` (9개 설정), 기존 셋 {len(manifest['nine'])}개 (1·7·8·9번), 실제 트래픽 {', '.join(traffic) or '-'} (9개 설정)",
              "- 8번은 새 기본값(release/defaults-1120)에 `PG_REMASK=off`다. 재마스킹으로만 가린 정답은 7번이 덮고 8번이 못 덮은 정답이다. "
              "7번은 `PG_DETECTOR_FILTER_DUMMY`도 켜므로, 그 거르기로 7번이 놓친 정답은 이 수에 들지 않는다.",
+             "- 9번은 새 기본값에 `--policy verifier`(#28)다. 새로 놓친 정답은 7번과 비교한다(9번은 DUMMY가 꺼져 있어, 7번보다 덜 거른다).",
              "- recall은 정답 span을 다 덮었는가, precision은 가린 글자 중 정답 글자의 비율이다. 값은 적지 않는다.", "",
              f"## CredData-trajectory ({cred})", "",
-             "| 설정 | recall | 글자 precision | F2 | 못 가린 span / 고유 값 | 재마스킹 오탐 | " + " | ".join(f"{t} 1,000줄당 오탐" for t in traffic)
-             + " | 걸러낸 수 (거르기별) | 새로 놓친 정답 | 재마스킹으로만 가린 정답 (span / 고유 값) |",
+             "| 설정 | recall | 글자 precision | F2 | 못 가린 span / 고유 값 | 재마스킹 오탐 |" + "".join(f" {t} 1,000줄당 오탐 |" for t in traffic)
+             + " 걸러낸 수 (거르기별) | 새로 놓친 정답 | 재마스킹으로만 가린 정답 (span / 고유 값) |",
              "|" + "---|" * (9 + len(traffic))]
     missed_rows, rule_rows, warnings = [], [], []
     for config in manifest["configs"]:
@@ -283,7 +304,7 @@ def build(out: Path, main_root: Path, branch_root: Path) -> Path:
         fp = [fmt(runs[(config, t)]["fp_per_1k"]) if (config, t) in runs else "-" for t in traffic]
         filtered = ", ".join(f"{k} {v}" for k, v in sorted(n["filtered"].items())) or "-"
         lines.append(f"| {label} | {fmt(n['recall'])} | {fmt(n['precision'])} | {fmt(n['f2'])} | {n['missed_spans']} / {n['missed_values']} | "
-                     f"{n['remask_fp']} | " + " | ".join(fp) + f" | {filtered} | {sum(lost.values()) if base else '-'} | {remask_cell(runs, config, cred)} |")
+                     f"{n['remask_fp']} |" + "".join(f" {cell} |" for cell in fp) + f" {filtered} | {sum(lost.values()) if base else '-'} | {remask_cell(runs, config, cred)} |")
     for (config, name), n in runs.items():
         recall, precision = n["scorer"]
         if recall is not None and n["recall"] is not None and abs(recall - n["recall"]) > 1e-9:
@@ -310,8 +331,16 @@ def build(out: Path, main_root: Path, branch_root: Path) -> Path:
                   "후보이고, 같은 자리를 여러 규칙이 냈으면 함께 적는다. 값은 적지 않는다.", ""]
         lines += (["| 처음 잡은 탐지기:규칙 | 재마스킹 오탐 span | 고유 값 |", "|---|---|---|",
                    *[f"| {catcher} | {count} | {values[catcher]} |" for catcher, count in spans.most_common()]] if spans else ["없음."])
+    verifier_rows = [(name, verifier_stats(runs[("9-defaults-verifier", name)])) for name in [cred, *manifest["nine"]] if ("9-defaults-verifier", name) in runs]
+    if verifier_rows:
+        lines += ["", "## 9번(새 기본값 + --policy verifier) 검증기", "",
+                  "애매함(ambiguous) 후보만 검증기에 간다. 구조 거르기에서 걸러진 후보는 가지 않는다. 새로 놓친 정답은 검증기가 가리지 않은 후보 중 "
+                  "이 실행에서 덮이지 않은 정답과 겹친 수다. timeout·fail-closed는 검증기 호출이 실패해 그 항목의 애매함 후보를 모두 가린 항목 수다.", "",
+                  "| 데이터셋 | 검사한 항목 | 가린 애매함 후보 | 안 가린 애매함 후보 | 안 가린 것 중 정답 (새로 놓친 정답) | timeout | fail-closed (timeout 포함) |",
+                  "|---|---|---|---|---|---|---|",
+                  *[f"| {name} | {s['items']} | {s['masked']} | {s['left']} | {s['left_gold']} | {s['timeout']} | {s['fail_closed']} |" for name, s in verifier_rows]]
     if manifest["nine"]:
-        lines += ["", "## 기존 셋 (1번, 7번, 8번)", "",
+        lines += ["", "## 기존 셋 (1번, 7번, 8번, 9번)", "",
                   "| 데이터셋 | 설정 | recall | 글자 precision | F2 | 못 가린 span / 고유 값 | 재마스킹 오탐 | 1,000줄당 오탐 | 재마스킹으로만 가린 정답 (span / 고유 값) |",
                   "|---|---|---|---|---|---|---|---|---|"]
         for name in manifest["nine"]:

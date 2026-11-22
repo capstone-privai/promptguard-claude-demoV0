@@ -324,7 +324,7 @@ class MyAdapter(DetectorAdapter):
 
 ## 통합 측정 (eval/integration-1118, release/defaults-1120)
 
-### 탐지 지표: 8개 설정을 한 번에
+### 탐지 지표: 9개 설정을 한 번에
 
 `scripts/eval_integration/run.py`가 promptguard-data의 채점기(`creddata-trajectory-data` 브랜치: 덮은 recall, 글자 precision, F2, `per_finding.jsonl`)로 아래 8개 설정을 돌리고 `report.md` 한 장을 냅니다. promptguard-data는 읽기만 합니다. 모든 설정은 실행마다 명시적으로 주므로, 이 브랜치의 새 기본값은 1~7번 결과를 바꾸지 않습니다.
 
@@ -338,6 +338,7 @@ class MyAdapter(DetectorAdapter):
 | 6 | 2 + `PG_RULE_HEX_KEY=on` |
 | 7 | 전부 on (`PG_PLACEHOLDER_GUIDE`, `PG_RESTORE_ESCAPED`, `PG_GUARD_COUNT_TOKENS`는 탐지 채점에 영향이 없지만 함께 켭니다) |
 | 8 | 새 기본값(release/defaults-1120) + `PG_REMASK=off`. 채점기의 Mod 재현(`ModSession`)에서 재마스킹만 뺍니다(`instrument.install_no_remask`) |
+| 9 | 새 기본값 + `--policy verifier`(#28, `PG_DETECTOR_CANDIDATE_POLICY=verifier`). 애매함 후보만 뒷단 검증기가 다시 판정합니다. 번들은 `--verifier-bundle DIR` 또는 `PG_VERIFIER_BUNDLE` |
 
 2~7번은 `PG_REMASK=on`입니다(지금까지 늘 켜져 있던 동작).
 
@@ -351,19 +352,20 @@ python $PG/scripts/eval_integration/run.py --data-root . \
          metric-detection/data_test/sessions_from_noseyparker.jsonl metric-detection/data_test/sessions_from_Nemotron-PII.jsonl \
          metric-detection/data_test/sessions_from_trajectory.jsonl metric-detection/data_test/sessions_from_openhands-feedback.jsonl \
          metric-detection/data_test/sessions_from_SWE-Gym.jsonl \
-  --out runs/eval-integration-1118 --jobs 2 --gitleaks ../tools/gitleaks-8.30.1
+  --out runs/eval-integration-1118 --jobs 2 --gitleaks ../tools/gitleaks-8.30.1 \n  --verifier-bundle ../promptguard-model/runs/verifier/creddata-mmbert-small/model
 ```
 
-- **돌리는 범위:** CredData-trajectory test는 8개 설정 모두, 기존 9셋은 1·7·8번만 돌립니다. 실제 트래픽(openhands-feedback, SWE-Gym)은 "1,000줄당 오탐" 열을 채우려고 8개 설정 모두 돌립니다. 8번만 더하려면 `--configs 7-all 8-defaults-no-remask`로 돌리고 표는 `--report-only`로 다시 만듭니다(끝난 실행은 건너뜁니다).
+- **돌리는 범위:** CredData-trajectory test는 9개 설정 모두, 기존 9셋은 1·7·8·9번만 돌립니다. 실제 트래픽(openhands-feedback, SWE-Gym)은 "1,000줄당 오탐" 열을 채우려고 9개 설정 모두 돌립니다. 9번만 더하려면 `--configs 9-defaults-verifier --verifier-bundle DIR`로 돌리고 표는 `--report-only`로 다시 만듭니다. 9번이 들어 있는데 번들이 없으면 실행기는 아무것도 돌리지 않고 멈춥니다. 8번만 더하려면 `--configs 7-all 8-defaults-no-remask`로 돌리고 표는 `--report-only`로 다시 만듭니다(끝난 실행은 건너뜁니다).
 - **이어 돌리기:** 끝난 실행은 다시 돌리지 않습니다(`--force`로 다시). `--report-only`는 표만 다시 만듭니다.
 - **표의 열:** recall(덮었는가), 글자 precision, F2, 못 가린 span 수 / 고유 값 수, 재마스킹 오탐, 실제 트래픽 1,000줄당 오탐, 거르기별 걸러낸 수, 새로 놓친 정답 수, 재마스킹으로만 가린 정답.
-  - 새로 놓친 정답은 2번은 1번과, 3~7번은 2번과, 8번은 7번과 비교합니다. 정답 유형, 기준 설정에서 찾은 규칙, 이 설정에서 그 위를 거른 거르기, 값 모양(종류·길이)별로 따로 표를 냅니다.
+  - 새로 놓친 정답은 2번은 1번과, 3~7번은 2번과, 8번과 9번은 7번과 비교합니다. 정답 유형, 기준 설정에서 찾은 규칙, 이 설정에서 그 위를 거른 거르기, 값 모양(종류·길이)별로 따로 표를 냅니다.
   - **재마스킹으로만 가린 정답**(8번 줄): 7번에서는 덮었고 8번에서는 못 덮은 정답 span 수 / 고유 값 수입니다. 7번은 `PG_DETECTOR_FILTER_DUMMY`도 켜므로, 그 거르기 때문에 7번이 놓친 정답은 이 수에 들지 않습니다.
 - **7번의 재마스킹 오탐은 그 값을 처음 잡은 탐지기·규칙별로 나눕니다.** 재마스킹 오탐 수와 고유 값 수를 적고, 같은 세션에서 그 값을 처음(가장 앞 항목, 그 안에서 가장 앞 위치) 낸 후보의 `adapter:rule`별로 span 수와 고유 값 수를 냅니다. 같은 자리를 여러 규칙이 냈으면 함께 적고, 세션 안에 그 값을 낸 후보가 없으면 따로 셉니다.
 - **7번은 후보 등급별로도 나눕니다.**
   - 바로 가림: `src/detector/high-confidence-rules.json`의 규칙이거나 strong 등급인 후보
   - 애매함: 그 밖의 moderate·ambiguous 후보
   - 각 등급의 TP·FP와, 애매함 구간에서 그 규칙만 찾은 정답 수를 냅니다.
+- **9번은 검증기 표를 따로 냅니다.** 데이터셋마다 검증기가 가린 애매함 후보 수, 안 가린 수, 안 가린 것 중 이 실행에서 덮이지 않은 정답과 겹친 수(검증기 때문에 새로 놓친 정답), 검증기 timeout과 fail-closed(그 항목의 애매함 후보를 모두 가림) 항목 수입니다. 구조 거르기에서 걸러진 후보는 검증기에 가지 않습니다.
 - **값은 출력하지 않습니다.** 값은 메모리에서 모양을 보고 고유 값을 세는 데만 씁니다.
 - recall과 precision은 채점기의 `per_span`·`per_edit`에서 다시 세고 `metrics.json`과 비교합니다. 다르면 표 끝에 적습니다.
 

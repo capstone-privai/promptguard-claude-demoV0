@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT / "src" / "detector"))
 
 import instrument  # noqa: E402
 import report  # noqa: E402
-from configs import ALL_SETS, BASELINE, CONFIGS, NEW_DEFAULTS, REMASK, SETTINGS  # noqa: E402
+from configs import ALL_SETS, BASELINE, CONFIGS, NEEDS_VERIFIER, NEW_DEFAULTS, POLICY, REMASK, SETTINGS  # noqa: E402
 from pgdetector import settings as detector_settings  # noqa: E402
 
 
@@ -39,13 +39,85 @@ class Configs(unittest.TestCase):
 
     def test_eight_is_the_new_defaults_with_the_re_mask_off(self) -> None:
         env = CONFIGS["8-defaults-no-remask"][1]
-        self.assertEqual(env, {**NEW_DEFAULTS, REMASK: "off"})
-        self.assertEqual(set(env), set(SETTINGS) | {REMASK}, "every setting given")
+        self.assertEqual(env, {**NEW_DEFAULTS, REMASK: "off", POLICY: "union"})
+        self.assertEqual(set(env), set(SETTINGS) | {REMASK, POLICY}, "every setting given")
         for name, value in detector_settings.DEFAULTS.items():
             if name in NEW_DEFAULTS:
                 self.assertEqual(NEW_DEFAULTS[name], value, name)
         self.assertEqual(BASELINE["8-defaults-no-remask"], "7-all")
         self.assertIn("8-defaults-no-remask", ALL_SETS)
+
+
+    def test_nine_is_the_new_defaults_with_the_verifier(self) -> None:
+        env = CONFIGS["9-defaults-verifier"][1]
+        self.assertEqual(env, {**NEW_DEFAULTS, REMASK: "on", POLICY: "verifier"})
+        self.assertEqual(BASELINE["9-defaults-verifier"], "7-all")
+        self.assertIn("9-defaults-verifier", ALL_SETS)
+        self.assertEqual(NEEDS_VERIFIER, ("9-defaults-verifier",))
+        for name, (_, env, _) in CONFIGS.items():
+            if name not in ("1-main", "9-defaults-verifier"):
+                self.assertEqual(env[POLICY], "union", f"{name}: the default policy, set explicitly")
+
+
+class Verifier(unittest.TestCase):
+    TEXT = "pw=SynthKeptValue9q tok=SynthLeftValue7x"
+
+    def module(self, scores: dict, error: Exception | None = None):
+        text = self.TEXT
+
+        class Stage:
+            threshold = 0.5
+
+            def score(self, *_args):
+                if error:
+                    raise error
+                return []
+
+        class PromptGuardAdapter:
+            def __init__(self) -> None:
+                self.detector = types.SimpleNamespace(verifier=Stage())
+                self._filter_queue, self._filter_session = [7], "s"
+
+            def _scan(self, scanned, source):
+                failed = False
+                try:
+                    self.detector.verifier.score(scanned, source, [])
+                except Exception:
+                    failed = True
+                candidates = []
+                for value, score in scores.items():
+                    start = text.index(value)
+                    candidates.append({"strength": "ambiguous", "start": start, "end": start + len(value), "rule_id": "r", "detectors": ["d"],
+                                       **({} if failed else {"verifier_score": score})})
+                candidates.append({"strength": "strong", "start": 0, "end": 2})
+                return {"candidates": candidates}
+
+        return types.SimpleNamespace(PromptGuardAdapter=PromptGuardAdapter)
+
+    def test_the_recorder_keeps_spans_scores_and_failures_only(self) -> None:
+        rows: list = []
+        module = self.module({"SynthKeptValue9q": 0.9, "SynthLeftValue7x": 0.1})
+        instrument.install_verifier_recorder(module, rows)
+        module.PromptGuardAdapter()._scan(self.TEXT, "tool_output")
+        (row,) = rows
+        self.assertEqual((row["session_id"], row["item_id"], row["timeout"], row["failure"]), ("s", 7, False, False))
+        self.assertEqual([(c["score"], c["masked"]) for c in row["ambiguous"]], [(0.9, True), (0.1, False)])
+        self.assertNotIn("SynthKeptValue9q", json.dumps(rows))
+
+    def test_a_timeout_is_fail_closed(self) -> None:
+        rows: list = []
+        module = self.module({"SynthKeptValue9q": 0.9}, RuntimeError("verifier timed out"))
+        instrument.install_verifier_recorder(module, rows)
+        module.PromptGuardAdapter()._scan(self.TEXT, "tool_output")
+        self.assertEqual((rows[0]["timeout"], rows[0]["failure"], rows[0]["ambiguous"][0]["masked"]), (True, True, True))
+
+    def test_stats(self) -> None:
+        left = self.TEXT.index("SynthLeftValue7x")
+        run = {"gold": [{"session_id": "s", "item_id": 7, "span_id": 0, "start": left, "end": left + 16}], "covered": set(),
+               "verifier": [{"session_id": "s", "item_id": 7, "timeout": False, "failure": False,
+                             "ambiguous": [{"start": 3, "end": 19, "masked": True}, {"start": left, "end": left + 16, "masked": False}]},
+                            {"session_id": "s", "item_id": 8, "timeout": True, "failure": True, "ambiguous": [{"start": 0, "end": 4, "masked": True}]}]}
+        self.assertEqual(report.verifier_stats(run), Counter({"items": 2, "masked": 2, "left": 1, "left_gold": 1, "timeout": 1, "fail_closed": 1}))
 
 
 class NoRemask(unittest.TestCase):

@@ -10,6 +10,8 @@ remask_floor/run_eval.py, code unchanged).
 - install_no_remask: PG_REMASK=off (release/defaults-1120) swaps in a ModSession whose re-mask does nothing, as
   register.mjs does: the ledger and the reverse map still fill, only the re-mask pass is skipped. Installed last, it
   also skips install_boundary's short-value pass.
+- install_verifier_recorder: candidate_policy "verifier" (configuration 9) writes verifier.jsonl: per item, the
+  ambiguous candidates' spans, verifier scores and whether each was masked, and verifier timeouts and fail-closed.
 The scorer's repository is not changed.
 """
 
@@ -130,3 +132,60 @@ def install_no_remask(module: Any) -> None:
 
     module.ModSession = NoRemaskModSession
 
+
+
+def install_verifier_recorder(module: Any, rows: list[dict[str, Any]]) -> None:
+    """candidate_policy "verifier" (configuration 9): per scanned item, each ambiguous candidate's span (code points),
+    verifier score and whether it was masked, and whether the verifier timed out or failed (fail-closed). No text.
+
+    Installed after install_recorder, so it reads the item id that install_recorder's wrapper pops next."""
+    adapter_class = module.PromptGuardAdapter
+    scan = adapter_class._scan
+
+    def code_points(text: str, unit: int) -> int:
+        count = 0
+        for index, char in enumerate(text):
+            if count >= unit:
+                return index
+            count += 2 if ord(char) > 0xFFFF else 1
+        return len(text)
+
+    def recording_scan(self: Any, text: str, source: str) -> Any:
+        verifier = getattr(self.detector, "verifier", None)
+        state = {"timeout": False, "failure": False}
+        if verifier is not None and not getattr(verifier, "_pg_recording", False):
+            original = verifier.score
+
+            def score(*args: Any, **kwargs: Any) -> Any:
+                try:
+                    return original(*args, **kwargs)
+                except Exception as exc:  # re-raised: the detector fails closed as it would
+                    verifier._pg_state["failure"] = True
+                    verifier._pg_state["timeout"] = "timed out" in str(exc)
+                    raise
+
+            verifier.score, verifier._pg_recording = score, True
+        if verifier is not None:
+            verifier._pg_state = state
+        queue = getattr(self, "_filter_queue", None)
+        item_id = queue[0] if queue else None
+        result = scan(self, text, source)
+        if verifier is None or not isinstance(result, dict):
+            return result
+        threshold = verifier.threshold
+        ambiguous = []
+        for candidate in result.get("candidates", []):
+            if candidate.get("strength") != "ambiguous":
+                continue
+            score_value = candidate.get("verifier_score")
+            utf16 = candidate.get("offset_unit", "utf16_code_units") == "utf16_code_units"
+            start = code_points(text, candidate["start"]) if utf16 else candidate["start"]
+            end = code_points(text, candidate["end"]) if utf16 else candidate["end"]
+            masked = state["failure"] or (score_value is not None and score_value >= threshold)
+            ambiguous.append({"start": start, "end": end, "score": score_value, "masked": masked,
+                              "rule_id": candidate.get("rule_id"), "detectors": candidate.get("detectors")})
+        rows.append({"session_id": getattr(self, "_filter_session", None), "item_id": item_id, "ambiguous": ambiguous,
+                     "timeout": state["timeout"], "failure": state["failure"]})
+        return result
+
+    adapter_class._scan = recording_scan

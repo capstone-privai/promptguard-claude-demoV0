@@ -1,4 +1,4 @@
-"""Integration measurement: the eight configurations of configs.py in one go, one table (report.py).
+"""Integration measurement: the nine configurations of configs.py in one go, one table (report.py).
 
 Run from anywhere; the scorer is promptguard-data's metric-detection (creddata-trajectory-data branch: covered recall,
 character precision, F2, per_finding.jsonl). promptguard-data is only read.
@@ -8,11 +8,13 @@ character precision, F2, per_finding.jsonl). promptguard-data is only read.
         --nine metric-detection/data_test/sessions_from_*.jsonl \\
         --out runs/eval-integration-1118 [--jobs 2] [--gitleaks ../tools/gitleaks-8.30.1]
 
-- CredData-trajectory test (--creddata): all eight configurations.
-- The nine sets (--nine): configurations 1, 7 and 8 only (configs.ALL_SETS).
-- Real traffic (--traffic, default the --nine files named openhands-feedback and SWE-Gym): all eight, for the
+- CredData-trajectory test (--creddata): all nine configurations.
+- The nine sets (--nine): configurations 1, 7, 8 and 9 only (configs.ALL_SETS).
+- Real traffic (--traffic, default the --nine files named openhands-feedback and SWE-Gym): all nine, for the
   false positives per 1,000 lines column.
 - Configuration 1 runs main 668c2c1 from a detached worktree (--main-root, made under --out when not given).
+- Configuration 9 (new defaults + --policy verifier) needs the verifier bundle: --verifier-bundle DIR or
+  PG_VERIFIER_BUNDLE, and the model repository detector.json names (promptguard-model).
 Finished runs are kept and skipped on the next call (--force runs them again). Relative paths are taken from
 --data-root. No value is printed or written outside the scorer's own run folders.
 """
@@ -29,7 +31,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs import ALL_SETS, CONFIGS, MAIN_COMMIT  # noqa: E402
+from configs import ALL_SETS, CONFIGS, MAIN_COMMIT, NEEDS_VERIFIER  # noqa: E402
 
 BRANCH_ROOT = HERE.parents[1]
 TRAFFIC_NAMES = ("openhands-feedback", "SWE-Gym")
@@ -63,6 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--configs", nargs="*", choices=tuple(CONFIGS), default=list(CONFIGS))
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--gitleaks", type=Path, help="folder holding the gitleaks binary, put first on PATH")
+    parser.add_argument("--verifier-bundle", type=Path, help="verifier bundle for configuration 9 (or PG_VERIFIER_BUNDLE)")
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--report-only", action="store_true")
@@ -87,6 +90,12 @@ def main(argv: list[str] | None = None) -> int:
     if not args.report_only:
         main_root = main_worktree(out, args.main_root) if "1-main" in args.configs else None
         env = dict(os.environ)
+        if args.verifier_bundle:
+            env["PG_VERIFIER_BUNDLE"] = str(args.verifier_bundle.resolve())
+        if any(c in NEEDS_VERIFIER for c in args.configs) and not env.get("PG_VERIFIER_BUNDLE"):
+            print("configuration 9 needs the verifier bundle: --verifier-bundle DIR or PG_VERIFIER_BUNDLE "
+                  "(or leave it out with --configs)", file=sys.stderr)
+            return 2
         if args.gitleaks:
             env["PATH"] = f"{args.gitleaks.resolve()}{os.pathsep}{env.get('PATH', '')}"
 

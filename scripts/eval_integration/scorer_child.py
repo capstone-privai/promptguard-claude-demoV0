@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from configs import ALL_SETTINGS, CONFIGS  # noqa: E402
-from instrument import install_boundary, install_no_remask, install_recorder  # noqa: E402
+from instrument import install_boundary, install_no_remask, install_recorder, install_verifier_recorder  # noqa: E402
 
 
 def run_folders(out: Path) -> set[Path]:
@@ -51,6 +51,9 @@ def main(argv: list[str] | None = None) -> int:
         install_boundary(promptguard_adapter)
     if (env or {}).get("PG_REMASK") == "off":
         install_no_remask(promptguard_adapter)
+    verifier_rows: list[dict] = []
+    if (env or {}).get("PG_DETECTOR_CANDIDATE_POLICY") == "verifier":
+        install_verifier_recorder(promptguard_adapter, verifier_rows)
     before = run_folders(out)
     scorer_args = ["run", "--system", "promptguard", "--system-root", str(args.system_root.resolve()),
                    "--sessions", str(args.sessions.resolve()), "--out", str(out)]
@@ -64,6 +67,10 @@ def main(argv: list[str] | None = None) -> int:
     with (new[0] / "filters.jsonl").open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row) + "\n")
+    if verifier_rows:
+        with (new[0] / "verifier.jsonl").open("w", encoding="utf-8") as handle:
+            for row in verifier_rows:
+                handle.write(json.dumps(row) + "\n")
     (new[0] / "eval_config.json").write_text(json.dumps({"config": args.config, "settings": env}, indent=2) + "\n", encoding="utf-8")
     return code
 

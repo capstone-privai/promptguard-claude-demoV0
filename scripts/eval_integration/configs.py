@@ -3,7 +3,9 @@
 1 is main as it was before the four PRs; 2 is this branch with every setting off; 3-6 turn on one thing each on top
 of 2; 7 turns everything on; 8 is the new defaults (release/defaults-1120) with PG_REMASK=off, against 7 for the gold
 spans only the re-mask covered. Every setting is set explicitly (or removed, for 1) so neither the shell nor a default
-can change a run.
+can change a run. 9 is the new defaults with candidate_policy "verifier" (#28, promptguard run --policy verifier): the
+back-end verifier re-judges the ambiguous candidates; its bundle comes from PG_VERIFIER_BUNDLE. Every other configuration
+sets the policy to union, the default.
 """
 
 from __future__ import annotations
@@ -35,11 +37,13 @@ NEW_DEFAULTS = {
 }
 # The re-mask switch (release/defaults-1120). Not one of the four PRs' settings: on in 2-7 as it always was.
 REMASK = "PG_REMASK"
-ALL_SETTINGS = (*SETTINGS, REMASK)
+# #28's policy switch (PG_DETECTOR_CANDIDATE_POLICY, what --policy sets). union is the default and stays it.
+POLICY = "PG_DETECTOR_CANDIDATE_POLICY"
+ALL_SETTINGS = (*SETTINGS, REMASK, POLICY)
 
 
 def _env(*on: str, remask: str = "on") -> dict[str, str]:
-    return {**{name: (values[1] if name in on else values[0]) for name, values in SETTINGS.items()}, REMASK: remask}
+    return {**{name: (values[1] if name in on else values[0]) for name, values in SETTINGS.items()}, REMASK: remask, POLICY: "union"}
 
 
 # name -> (system root: "main" or "branch", environment, short label)
@@ -51,10 +55,13 @@ CONFIGS = {
     "5-floor": ("branch", _env("PG_REMASK_SHORT", "PG_SHELL_POSITIONAL_MIN"), "+REMASK_SHORT=boundary+POSITIONAL_MIN=4"),
     "6-hex": ("branch", _env("PG_RULE_HEX_KEY"), "+HEX_KEY"),
     "7-all": ("branch", _env(*SETTINGS), "all on"),
-    "8-defaults-no-remask": ("branch", {**NEW_DEFAULTS, REMASK: "off"}, "new defaults + REMASK=off"),
+    "8-defaults-no-remask": ("branch", {**NEW_DEFAULTS, REMASK: "off", POLICY: "union"}, "new defaults + REMASK=off"),
+    "9-defaults-verifier": ("branch", {**NEW_DEFAULTS, REMASK: "on", POLICY: "verifier"}, "new defaults + --policy verifier"),
 }
+# Configurations that need the verifier bundle (PG_VERIFIER_BUNDLE).
+NEEDS_VERIFIER = ("9-defaults-verifier",)
 # Newly missed gold is counted against this configuration.
 BASELINE = {"2-off": "1-main", "3-filters": "2-off", "4-filters-dummy": "2-off", "5-floor": "2-off", "6-hex": "2-off", "7-all": "2-off",
-            "8-defaults-no-remask": "7-all"}
+            "8-defaults-no-remask": "7-all", "9-defaults-verifier": "7-all"}
 # Configurations run on every set of --nine, not only on CredData-trajectory and real traffic.
-ALL_SETS = ("1-main", "7-all", "8-defaults-no-remask")
+ALL_SETS = ("1-main", "7-all", "8-defaults-no-remask", "9-defaults-verifier")
