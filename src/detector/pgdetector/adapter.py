@@ -51,3 +51,10 @@ class DetectorAdapter(ABC):
     def scan_many(self, texts: Sequence[str]) -> list[list[RawFinding]]:
         """Scan a batch. Override when the backing tool has a cheaper batch path."""
         return [self.scan(text) for text in texts]
+
+    def declined(self) -> list[Mapping[str, int]] | None:
+        """For the last scan_many in this thread: per text, how many values the adapter itself declined, by reason.
+
+        The ensemble adds these to the detector filter counts (PG_DETECTOR_FILTERS). Counts only, never values.
+        """
+        return None

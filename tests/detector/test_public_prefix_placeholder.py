@@ -41,7 +41,11 @@ def detector(*adapters: DetectorAdapter) -> Detector:
 
 class PublicPrefixPlaceholder(unittest.TestCase):
     def count(self, option: str | None, value: str, text: str | None = None) -> int:
-        env = {} if option is None else {"PG_PLACEHOLDER_PUBLIC_PREFIX": option}
+        # The public-prefix logic alone: PG_DETECTOR_FILTERS would drop a stub span over prefix + [TYPE_N] as code
+        # (test_integration_interactions.PublicPrefixUnderFilters), so it is pinned off here.
+        env = {"PG_DETECTOR_FILTERS": "off", "PG_DETECTOR_FILTER_DUMMY": "off"}
+        if option is not None:
+            env["PG_PLACEHOLDER_PUBLIC_PREFIX"] = option
         with mock.patch.dict(os.environ, env):
             if option is None:
                 os.environ.pop("PG_PLACEHOLDER_PUBLIC_PREFIX", None)
