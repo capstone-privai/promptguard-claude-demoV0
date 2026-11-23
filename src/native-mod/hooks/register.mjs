@@ -302,28 +302,42 @@ function placeholderGuide(escaped) {
 // placeholder path. Heuristic on the command text: a path built from a variable, $( ), a glob or a link, a cd before a
 // relative path, and tools other than Bash are not seen (docs/SECRET_DUMP_GUARD.md).
 const SECRET_DUMP_NOTICE = '[PROMPTGUARD: 비밀 파일을 변형해 출력한 결과라 가렸습니다. 값은 placeholder로 다루고, 속성은 값을 출력하지 않는 명령으로 확인하세요]'
-const SECRET_FILE_NAME = /secret|password|passwd|credential|token/i
+// Whole words of the file name (snake, kebab, dot and camelCase split): token_utils has "token", tokenizer does not.
+const SECRET_NAME_WORDS = new Set(['secret', 'secrets', 'password', 'passwords', 'passwd', 'credential', 'credentials', 'token', 'tokens'])
+// A file picked by its name alone is not a secret when it is source or docs (src/token_utils.py, docs/password_policy.md).
+const SOURCE_EXTENSIONS = new Set(['py', 'js', 'ts', 'tsx', 'jsx', 'go', 'rs', 'java', 'kt', 'rb', 'php', 'c', 'cc', 'cpp', 'h', 'cs', 'swift', 'md', 'rst'])
 const SECRET_EXACT_NAMES = new Set(['.env', '.netrc', '.npmrc', '.pypirc'])
-const DUMP_COMMANDS = new Set(['od', 'xxd', 'hexdump', 'hd', 'base64', 'base32', 'basenc', 'fold', 'rev'])
+const DUMP_COMMANDS = new Set(['od', 'xxd', 'hexdump', 'hd', 'base64', 'base32', 'basenc', 'fold', 'rev', 'dd'])
+// grep -o with a pattern that matches any short run of characters (., .{1,2}, [^ ]): one character or two a line.
+const ANY_CHARS = /^(?:(?:\.|\\[Sw]|\[[^\]]*\])(?:\{\d+(?:,\d*)?\}|[?*+])?)+$/
 const COMMAND_WRAPPERS = new Set(['sudo', 'env', 'nice', 'time', 'command', 'exec', 'nohup', 'stdbuf'])
 // Code of an interpreter that prints a value a character (or a byte) at a time, or encoded.
 const CHAR_CODE = {
-  awk: /split\([^)]*,\s*""\s*\)|substr\([^,]+,\s*\w+\s*,\s*1\s*\)/,
+  awk: /split\([^)]*,\s*""\s*\)|substr\(/,
   python: /\blist\(|\bord\(|\[::|\.hex\(|hexlify|b64encode|b32encode|b16encode|\bbytes\(|\brepr\(|\.join\(|\.encode\(/,
   node: /split\(\s*(['"`])\1\s*\)|charCodeAt|codePointAt|\[\s*\.\.\.|Array\.from\(|toString\(\s*['"](?:hex|base64)|\.join\(/,
   perl: /split\s*\(?\s*\/\/|\bunpack\b|\bord\b|\bsprintf\b|\bjoin\b/,
 }
 const INTERPRETERS = { awk: 'awk', gawk: 'awk', mawk: 'awk', python: 'python', python3: 'python', py: 'python', node: 'node', deno: 'node', bun: 'node', perl: 'perl', ruby: 'perl' }
 
-function secretPath(path) {
+// 'place' (secrets/, an exact name, .env.*, .pem, .key, id_rsa, id_ed25519: secret by where or what it is), 'name'
+// (a secret word in the file name, source and docs extensions left out), or null.
+function secretPathKind(path) {
   const parts = path.split(/[\\/]/)
   const base = parts.at(-1)
   // secrets/ itself too: secrets/* and $(ls secrets/*) read what is in it.
-  if (parts.slice(0, -1).some(part => part.toLowerCase() === 'secrets')) return true
-  if (!base) return false
-  if (SECRET_EXACT_NAMES.has(base) || base.startsWith('.env.')) return true
-  if (/^id_(?:rsa|ed25519)/.test(base) || /\.(?:pem|key)$/i.test(base)) return true
-  return SECRET_FILE_NAME.test(base)
+  if (parts.slice(0, -1).some(part => part.toLowerCase() === 'secrets')) return 'place'
+  if (!base) return null
+  if (SECRET_EXACT_NAMES.has(base) || base.startsWith('.env.')) return 'place'
+  if (/^id_(?:rsa|ed25519)/.test(base) || /\.(?:pem|key)$/i.test(base)) return 'place'
+  const extension = base.includes('.') ? base.slice(base.lastIndexOf('.') + 1).toLowerCase() : ''
+  if (SOURCE_EXTENSIONS.has(extension)) return null
+  const words = base.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().split(/[^a-z0-9]+/)
+  return words.some(word => SECRET_NAME_WORDS.has(word)) ? 'name' : null
+}
+
+function secretPath(path) {
+  return secretPathKind(path) !== null
 }
 
 // The words of one segment, quotes removed.
@@ -366,7 +380,16 @@ function segmentDumpTool(words, at) {
   const args = words.slice(at + 1)
   if (DUMP_COMMANDS.has(name)) return name
   if (name === 'cut' && args.some(arg => /^-[a-z]*c/.test(arg) || arg.startsWith('--characters'))) return 'cut'
-  if (name === 'sed' && args.some(arg => /s(.)(?:\.|\\?\(\.\\?\))\1/.test(arg))) return 'sed'
+  // head -c N / tail -c N: the first or last bytes only (metric-task t10). head -n and -5 are line reads.
+  if ((name === 'head' || name === 'tail') && args.some(arg => /^-[a-z]*c\d*$/.test(arg) || arg.startsWith('--bytes'))) return name
+  // cat -A -v -e -t (-E -T): special characters made visible.
+  if (name === 'cat' && args.some(arg => /^-[A-Za-z]*[AvetET]/.test(arg) || /^--show-/.test(arg))) return 'cat'
+  // sed: a substitution a character at a time, or the l command (prints special characters visibly).
+  if (name === 'sed' && args.some(arg => /s(.)(?:\.|\\?\(\.\\?\))\1/.test(arg) || /(?:^|[;{}\s/\d])l(?:\s*\d+)?\s*(?:$|[;}])/.test(arg))) return 'sed'
+  if ((name === 'grep' || name === 'egrep') && args.some(arg => /^-[A-Za-z]*o/.test(arg) || arg === '--only-matching')) {
+    const pattern = args.find((arg, index) => !arg.startsWith('-') && args[index - 1] !== '-e' && args[index - 1] !== '-f') ?? args[args.indexOf('-e') + 1]
+    if (pattern && pattern.length <= 16 && ANY_CHARS.test(pattern.replace(/^\^|\$$/g, ''))) return 'grep'
+  }
   const family = INTERPRETERS[name]
   if (family && args.some(arg => CHAR_CODE[family].test(arg))) return name
   return null
@@ -406,7 +429,8 @@ function guardedResult(result) {
 }
 
 const PRELOAD_MAX_BYTES = 256
-const PRELOAD_MIN_CHARS = 8
+// 3 for a file secret by where or what it is (secrets/, .netrc ...), 8 for one picked by a word in its name alone.
+const PRELOAD_MIN_CHARS = { place: 3, name: 8 }
 const preloaded = new Set()
 
 function preloadType(path) {
@@ -435,7 +459,7 @@ async function preloadSecretFiles($, paths) {
       const text = String(await $.fs.read(path))
       if (new TextEncoder().encode(text).length > PRELOAD_MAX_BYTES) continue
       const raw = text.trim()
-      if (raw.length < PRELOAD_MIN_CHARS || /[\r\n]/.test(raw) || /^\[[A-Z0-9_]+_\d+\]$/.test(raw) || reverseVault.has(raw)) continue
+      if (raw.length < (PRELOAD_MIN_CHARS[secretPathKind(path)] ?? Infinity) || /[\r\n]/.test(raw) || /^\[[A-Z0-9_]+_\d+\]$/.test(raw) || reverseVault.has(raw)) continue
       const kind = preloadType(path)
       const next = (counters.get(kind) || 0) + 1
       counters.set(kind, next)
@@ -867,7 +891,10 @@ export function register(on) {
     const extra = { hook: 'tool.call', tool: e.tool, operation, restored_count: restoredCount }
     const dump = e.tool === 'Bash' ? secretDumpTool(e.command) : { tool: null, paths: [] }
     const dumpTool = dump.tool && setting('PG_SECRET_DUMP_GUARD', await $.env.get('PG_SECRET_DUMP_GUARD')) === 'on' ? dump.tool : null
-    if (dump.paths.length && setting('PG_SECRET_FILE_PRELOAD', await $.env.get('PG_SECRET_FILE_PRELOAD')) === 'on') await preloadSecretFiles($, dump.paths)
+    // Read too: a secret-looking file Read opens is preloaded before its content reaches the detector, so the re-mask
+    // covers what the detector misses (a password file with no key name).
+    const preloadPaths = e.tool === 'Read' && typeof e.file_path === 'string' && secretPath(e.file_path) ? [e.file_path] : dump.paths
+    if (preloadPaths.length && setting('PG_SECRET_FILE_PRELOAD', await $.env.get('PG_SECRET_FILE_PRELOAD')) === 'on') await preloadSecretFiles($, preloadPaths)
     await appendAudit($, toolSource(e, false), lifecycle, { ...extra, event: 'tool_started' })
     let result
     try { result = await next(input) }

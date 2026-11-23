@@ -171,7 +171,8 @@ test('preload skips a big, multi-line, short or missing file', async () => {
   const cases = {
     'secrets/big.txt': 'x'.repeat(257),
     'secrets/multi.txt': 'Synth.Line.One9q\nSynth.Line.Two9q\n',
-    'secrets/short.txt': 'ab1\n',
+    'secrets/short.txt': 'ab\n', // under 3 characters, even in secrets/
+    'notes_password.txt': 'Zq8x5\n', // a name match alone needs 8
   }
   const { hooks, $ } = await load({ PG_SECRET_FILE_PRELOAD: 'on' }, { find: false, files: cases })
   for (const file of [...Object.keys(cases), 'secrets/missing.txt']) await bash(hooks, $, `od -c ${file}`, 'x')
@@ -216,4 +217,84 @@ test('limits: a path from a variable, a glob or another file is not seen', async
 test('a path in $( ) that names the secret directory is seen', async () => {
   const { hooks, $ } = await load()
   assert.equal((await bash(hooks, $, 'od -c $(ls secrets/*)', 'x')).stdout, NOTICE)
+})
+
+// ---- fix/secret-dump-guard follow-up: partial and visible-character dumps, name rules, preload length, Read
+
+const MORE_DUMPS = [
+  ['head', `head -c 6 ${FILE}`],
+  ['head', `head --bytes=6 ${FILE}`],
+  ['head', `head -c6 ${FILE}`],
+  ['tail', `tail -c 4 ${FILE}`],
+  ['dd', `dd if=${FILE} bs=1 count=4 2>/dev/null`],
+  ['cat', `cat -A ${FILE}`],
+  ['cat', `cat -v ${FILE}`],
+  ['cat', `cat -e ${FILE}`],
+  ['cat', `cat -t ${FILE}`],
+  ['cat', `cat -vet ${FILE}`],
+  ['cat', `cat --show-all ${FILE}`],
+  ['sed', `sed -n l ${FILE}`],
+  ['sed', `sed -n 'l' ${FILE}`],
+  ['grep', `grep -o . ${FILE}`],
+  ['grep', `grep -o '.{1,2}' ${FILE}`],
+  ['grep', `grep -oE '.{1,2}' ${FILE}`],
+  ['grep', `grep -Eo '..' ${FILE}`],
+  ['awk', `awk '{print substr($0,1,6)}' ${FILE}`],
+  ['awk', `awk '{ print substr($0, 3) }' ${FILE}`],
+  ['base64', "kubectl get secret db -o jsonpath='{.data.password}' | base64 -d"],
+]
+
+test('partial and visible-character dumps of a secret file are replaced too', async () => {
+  for (const [tool, command] of MORE_DUMPS) {
+    const { hooks, $, audit } = await load()
+    const out = await bash(hooks, $, command, PASS.slice(0, 6))
+    assert.equal(out.stdout, NOTICE, command)
+    assert.equal(audit.find(entry => entry.event === 'secret_dump_guarded')?.dump_tool, tool, command)
+  }
+})
+
+test('plain reads stay on the detector path: cat, head -n, line grep', async () => {
+  for (const command of [`cat ${FILE}`, `head -n 1 ${FILE}`, `head -1 ${FILE}`, `tail -n 2 ${FILE}`, `grep PASS ${FILE}`, `grep -c '[$]' ${FILE}`,
+    `grep -o 'DB_[A-Z_]*' ${FILE}`, `sed -n 1p ${FILE}`, `awk '{print $1}' ${FILE}`]) {
+    const { hooks, $, audit } = await load()
+    await bash(hooks, $, command, 'x')
+    assert.ok(!audit.some(entry => entry.event === 'secret_dump_guarded'), command)
+  }
+})
+
+test('name rules: whole words only, and source files picked by name alone are left out', async () => {
+  for (const path of ['tokenizer.json', 'src/token_utils.py', 'src/secret_scanner.py', 'docs/password_policy.md', 'lib/credentials.ts', 'mysecretsauce.txt']) {
+    const { hooks, $, audit } = await load({}, { files: {} })
+    await bash(hooks, $, `od -c ${path}`, 'x')
+    assert.ok(!audit.some(entry => entry.event === 'secret_dump_guarded'), path)
+  }
+  for (const path of ['credentials.json', 'api_token.txt', 'dbPassword.txt', 'secrets/app.py', 'secrets/notes.md', 'certs/server.key', 'tls.pem',
+    'id_rsa', '.netrc', '.npmrc', '.pypirc', 'DB_PASSWORD', 'passwords.txt', 'aws_credentials']) {
+    const { hooks, $ } = await load({}, { files: {} })
+    assert.equal((await bash(hooks, $, `od -c ${path}`, 'x')).stdout, NOTICE, path)
+  }
+})
+
+test('preload length: 3 characters in secrets/ or an exact name, 8 for a name match alone', async () => {
+  const files = { 'secrets/pin.txt': 'q7Z\n', '.netrc': 'w9Kp\n', 'my_password.txt': 'Zq8x5\n', 'api_token.txt': 'SynthTok9qXy\n' }
+  const { hooks, $ } = await load({ PG_SECRET_FILE_PRELOAD: 'on' }, { find: false, files })
+  for (const file of Object.keys(files)) await bash(hooks, $, `cat ${file}`, 'x')
+  assert.equal(await read(hooks, $, 'pin q7Z, netrc w9Kp, short Zq8x5, token SynthTok9qXy, word xq7Zy'),
+    'pin [SECRET_1], netrc [SECRET_2], short Zq8x5, token [TOKEN_1], word xq7Zy')
+})
+
+async function readTool(hooks, $, filePath, content) {
+  const result = await hooks['tool.call']($, { tool: 'Read', tool_use_id: 't', file_path: filePath }, () => ({ result: { type: 'text', file: { filePath, content } } }))
+  return result.result.file.content
+}
+
+test('preload on Read: a secret-looking file is preloaded before its content is scanned', async () => {
+  const { hooks, $, reads } = await load({ PG_SECRET_FILE_PRELOAD: 'on' }, { find: false })
+  assert.equal(await readTool(hooks, $, FILE, `${PASS}\n`), '[PASSWORD_1]\n')
+  assert.ok(reads.includes(FILE))
+  const off = await load({}, { find: false })
+  assert.equal(await readTool(off.hooks, off.$, FILE, `${PASS}\n`), `${PASS}\n`, 'off: as before')
+  const other = await load({ PG_SECRET_FILE_PRELOAD: 'on' }, { find: false, files: { 'README.md': 'Synth readme text\n' } })
+  await readTool(other.hooks, other.$, 'README.md', 'Synth readme text\n')
+  assert.deepEqual(other.reads.filter(file => file === 'README.md'), [], 'a file that does not look secret is not read again')
 })

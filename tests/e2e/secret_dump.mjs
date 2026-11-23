@@ -24,12 +24,14 @@ const DUMPS = [
   ['base64', `base64 ${FILE}`],
   ['python', `python -c "print(list(open('${FILE}').read()))"`],
   ['fold', `fold -w 3 ${FILE}`],
+  ['head', `head -c 6 ${FILE}`],
+  ['cat', `cat -A ${FILE}`],
 ]
 const PLACEHOLDER = /\[[A-Z_]+_\d+\]/
 // Pieces of the value in the forms the dump tools print it: no request may hold any of them.
 // od -c: a character every four columns; xxd: hex in groups of two bytes; fold -w 3: three characters a line.
 const HEX = Buffer.from(PASS).toString('hex').match(/.{4}/g)
-const FORMS = [PASS, Buffer.from(`${PASS}\n`).toString('base64').slice(0, 12), PASS.split('').map(c => `'${c}'`).join(', ').slice(0, 30), 'nth$P', 'Pa ',
+const FORMS = [PASS, PASS.slice(0, 6), Buffer.from(`${PASS}\n`).toString('base64').slice(0, 12), PASS.split('').map(c => `'${c}'`).join(', ').slice(0, 30), 'nth$P', 'Pa ',
   PASS.slice(3, 8).split('').join('   '), `${HEX[2]} ${HEX[3]}`, `${PASS.slice(3, 6)}\n${PASS.slice(6, 9)}`]
 
 const freePort = () => new Promise((resolve, reject) => {
@@ -76,7 +78,8 @@ function sse(res, blocks, stop) {
 }
 
 // Runs the commands one by one (one Bash call per request, decided on the whole history), then finishes.
-function startProvider(commands) {
+// A command "READ <path>" is a Read tool call on that workspace file; any other is a Bash command.
+function startProvider(commands, ws) {
   const requests = []
   const server = http.createServer((req, res) => {
     const chunks = []
@@ -96,7 +99,8 @@ function startProvider(commands) {
       const history = JSON.stringify(body.messages)
       const next = (body.tools || []).length ? commands.findIndex((_, i) => !history.includes(`toolu_cmd${i}`)) : -1
       if (next === -1) return sse(res, [{ type: 'text', text: 'Finished.' }], 'end_turn')
-      return sse(res, [{ type: 'tool_use', id: `toolu_cmd${next}`, name: 'Bash', input: { command: commands[next], description: 'look at the file' } }], 'tool_use')
+      const call = commands[next].startsWith('READ ') ? { name: 'Read', input: { file_path: path.join(ws, commands[next].slice(5)) } } : { name: 'Bash', input: { command: commands[next], description: 'look at the file' } }
+      return sse(res, [{ type: 'tool_use', id: `toolu_cmd${next}`, ...call }], 'tool_use')
     })
   })
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve({ server, requests, url: `http://127.0.0.1:${server.address().port}` })))
@@ -117,13 +121,13 @@ async function session(name, commands, env, worker) {
   fs.mkdirSync(path.join(ws, 'secrets'), { recursive: true })
   fs.writeFileSync(path.join(ws, FILE), `${PASS}\n`)
   fs.writeFileSync(path.join(ws, 'README.md'), README)
-  const provider = await startProvider(commands)
+  const provider = await startProvider(commands, ws)
   const mcpConfig = path.join(dir, 'mcp.json')
   fs.writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { pgdetector: { command: 'node', args: [path.join(ROOT, 'src/detector/mcp-bridge.cjs')] } } }))
   const base = { ...process.env }
   for (const key of ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID']) delete base[key]
   const result = await run('claude', ['-p', 'Check the database password file', '--plugin-dir', path.join(ROOT, 'src/native-mod'), '--mcp-config', mcpConfig,
-    '--allowedTools', 'Bash', 'mcp__pgdetector__scan_batch', '--output-format', 'json', '--model', MODEL], {
+    '--allowedTools', 'Bash', 'Read', 'mcp__pgdetector__scan_batch', '--output-format', 'json', '--model', MODEL], {
     cwd: ws,
     env: {
       ...base, CLAUDE_CONFIG_DIR: path.join(dir, 'cfg'), ANTHROPIC_BASE_URL: provider.url, ANTHROPIC_API_KEY: 'sk-ant-e2e-dummy',
@@ -179,6 +183,15 @@ try {
   checks.cat_preload_on_masked_with_placeholder = PLACEHOLDER.test(preload.results[0] ?? '') && !(preload.results[0] ?? '').includes('PROMPTGUARD:')
   checks.cat_preload_on_no_raw_reached_the_api = !preload.leaked
   checks.preload_audit_has_no_path_or_value = !preload.rawInAudit
+
+  // Read of a password file with no key name: the detector finds nothing, so only the preload keeps it back.
+  const readOff = await session('read-preload-off', [`READ ${FILE}`], { PG_SECRET_FILE_PRELOAD: 'off' }, worker)
+  info.read_preload_off_raw_reached_the_api = readOff.leaked
+  const readOn = await session('read-preload-on', [`READ ${FILE}`], { PG_SECRET_FILE_PRELOAD: 'on' }, worker)
+  checks.read_preload_on_session_finished = readOn.code === 0 && readOn.answer === 'Finished.'
+  checks.read_preload_on_masked_with_placeholder = PLACEHOLDER.test(readOn.results[0] ?? '')
+  checks.read_preload_on_no_raw_reached_the_api = !readOn.leaked
+  checks.read_preload_audit_has_no_path_or_value = !readOn.rawInAudit
 } finally {
   worker.child.kill()
 }
