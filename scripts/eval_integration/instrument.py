@@ -189,3 +189,16 @@ def install_verifier_recorder(module: Any, rows: list[dict[str, Any]]) -> None:
         return result
 
     adapter_class._scan = recording_scan
+
+
+def install_runtime_recorder(module: Any, adapters: list[Any]) -> None:
+    """Keeps the scorer's PromptGuard adapter, so the run can record what its detector actually ran with
+    (runtime.runtime_record: policy, adapters, model device, timeout and bundle name)."""
+    adapter_class = module.PromptGuardAdapter
+    init = adapter_class.__init__
+
+    def recording_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        init(self, *args, **kwargs)
+        adapters.append(self)
+
+    adapter_class.__init__ = recording_init

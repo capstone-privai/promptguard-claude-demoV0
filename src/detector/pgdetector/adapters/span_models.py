@@ -24,6 +24,7 @@ treat as a blocked scan. Nothing here logs or returns candidate text.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -237,12 +238,22 @@ class MLV9Adapter(_ModelRepoAdapter):
                 raise AdapterUnavailable("span model dependencies are not installed (torch, transformers)") from exc
         threshold = options.get("threshold")
         self.threshold = float(threshold) if threshold is not None else None
+        # PG_ML_DEVICE overrides detector.json's device for ml-span and ml-v9 (a GPU server for measurement); the
+        # product default stays "cpu". ml-qwen keeps its own "device".
+        self.device = str(os.environ.get("PG_ML_DEVICE") or options.get("device", "cpu"))
+        self.checkpoint_name = checkpoint.name
+        # The supervisor compares this between the Mod's and the Guard's workers (model_settings): a digest of the
+        # resolved folder, never the path itself.
+        self.checkpoint_digest = path_digest(checkpoint)
         try:
-            self.model = factory(checkpoint, device=str(options.get("device", "cpu")))
+            self.model = factory(checkpoint, device=self.device)
         except Exception as exc:
             raise AdapterUnavailable(f"{checkpoint.name} model initialization failed") from exc
         self.model_id = _bundle_id(checkpoint / "span_bundle.json", checkpoint.name)
         self.version = self.model_id
+
+    def runtime_settings(self) -> Mapping[str, Any]:
+        return {"device": self.device, "timeout_seconds": self.timeout, "checkpoint": self.checkpoint_name}
 
     def _spans(self, text: str) -> list[tuple[int, int, float]]:
         rows = self.model.scan_text(text, threshold=self.threshold)  # raises RuntimeError on failure
@@ -255,7 +266,11 @@ class MLSpanAdapter(MLV9Adapter):
     family = "ml_span"
 
     def __init__(self, name: str, options: Mapping[str, Any], config_dir: Path, *, factory: Callable[..., Any] | None = None) -> None:
-        super().__init__(name, {"checkpoint": "default", "fallback_checkpoint": DEFAULT_SPAN_BUNDLE, **options}, config_dir, factory=factory)
+        # PG_ML_CHECKPOINT picks the bundle without editing detector.json (as PG_VERIFIER_BUNDLE does for the
+        # verifier): a folder relative to the model repository, or absolute. ml-v9 stays pinned to v9.
+        chosen = os.environ.get("PG_ML_CHECKPOINT")
+        merged = {"checkpoint": "default", "fallback_checkpoint": DEFAULT_SPAN_BUNDLE, **options, **({"checkpoint": chosen} if chosen else {})}
+        super().__init__(name, merged, config_dir, factory=factory)
 
 
 class QwenAdapter(_ModelRepoAdapter):
@@ -291,6 +306,10 @@ class QwenAdapter(_ModelRepoAdapter):
         self.limit = int(getattr(self.model, "max_input_tokens", 4096))
         self.model_id = _bundle_id(bundle / "qwen_bundle.json", bundle.name)
         self.version = self.model_id
+        self.device, self.bundle_name = kwargs["device"], bundle.name
+
+    def runtime_settings(self) -> Mapping[str, Any]:
+        return {"device": self.device, "timeout_seconds": self.timeout, "bundle": self.bundle_name}
 
     def _fits(self, text: str) -> bool:
         return self.model.detector.prompt_length(text) <= self.limit
@@ -334,6 +353,11 @@ class QwenAdapter(_ModelRepoAdapter):
                 key = (base + int(finding.start), base + int(finding.end))
                 found[key] = max(found.get(key, 0.0), float(finding.score))
         return [(start, end, score) for (start, end), score in sorted(found.items())]
+
+
+def path_digest(path: Path) -> str:
+    """16 hex characters of sha256 over the resolved path: equal paths compare equal, the path is not kept."""
+    return hashlib.sha256(str(Path(path).resolve()).encode("utf-8")).hexdigest()[:16]
 
 
 def _bundle_id(path: Path, fallback: str) -> str:

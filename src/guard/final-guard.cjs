@@ -69,20 +69,28 @@ function sendJson(response, statusCode, value, extraHeaders = {}) {
 
 // filterMismatch: detector filter settings (names) that differ between the Native Mod's and this Guard's detector
 // workers. A finding then may be text the Mod's filters let through, so the block says why.
-function sendGuardError(response, requestId, error, filterMismatch = []) {
+// modelMismatch: the same for the model settings (ml-span checkpoint, verifier bundle, candidate policy).
+function sendGuardError(response, requestId, error, filterMismatch = [], modelMismatch = []) {
   const code = error instanceof GuardError ? error.code : 'INTERNAL_ERROR'
   const statusCode = error instanceof GuardError ? error.statusCode : 500
-  const mismatch = code === 'DETECTOR_FINDINGS' && filterMismatch.length > 0
+  const findings = code === 'DETECTOR_FINDINGS'
+  const filters = findings && filterMismatch.length > 0
+  const models = findings && modelMismatch.length > 0
+  const base = errorMessage(error instanceof GuardError ? error.messageKey : code)
   sendJson(response, statusCode, {
     type: 'error',
     error: {
       type: 'promptguard_block',
       code,
-      // #25 picks the message (the system prompt hint); #23 appends the filter settings mismatch to it.
-      message: mismatch
-        ? `${errorMessage(error.messageKey)} 필터 설정 불일치: ${filterMismatch.join(', ')} (the Native Mod and Final Guard detectors run different filter settings).`
-        : errorMessage(error instanceof GuardError ? error.messageKey : code),
-      ...(mismatch ? { filter_settings_mismatch: [...filterMismatch] } : {}),
+      // #25 picks the message (the system prompt hint); #23 appends the filter settings mismatch to it, and the
+      // model settings mismatch follows under its own heading.
+      message: [
+        base,
+        ...(filters ? [`필터 설정 불일치: ${filterMismatch.join(', ')} (the Native Mod and Final Guard detectors run different filter settings).`] : []),
+        ...(models ? [`모델 설정 불일치: ${modelMismatch.join(', ')} (the Native Mod and Final Guard detectors run different model settings).`] : []),
+      ].join(' '),
+      ...(filters ? { filter_settings_mismatch: [...filterMismatch] } : {}),
+      ...(models ? { model_settings_mismatch: [...modelMismatch] } : {}),
       request_id: requestId,
     },
   }, { 'x-promptguard-request-id': requestId })
@@ -255,7 +263,7 @@ class FinalGuard {
       scan_latency_ms: context.scanLatencyMs,
       upstream_status: null,
     })
-    sendGuardError(response, context.requestId, error, this.config.filterMismatch)
+    sendGuardError(response, context.requestId, error, this.config.filterMismatch, this.config.modelMismatch)
   }
 
   async readiness() {

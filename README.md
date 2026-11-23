@@ -354,8 +354,11 @@ python $PG/scripts/eval_integration/run.py --data-root . \
          metric-detection/data_test/sessions_from_noseyparker.jsonl metric-detection/data_test/sessions_from_Nemotron-PII.jsonl \
          metric-detection/data_test/sessions_from_trajectory.jsonl metric-detection/data_test/sessions_from_openhands-feedback.jsonl \
          metric-detection/data_test/sessions_from_SWE-Gym.jsonl \
-  --out runs/eval-integration-1118 --jobs 2 --gitleaks ../tools/gitleaks-8.30.1 \n  --verifier-bundle ../promptguard-model/runs/verifier/creddata-mmbert-small/model
+  --out runs/eval-integration-1118 --jobs 2 --gitleaks ../tools/gitleaks-8.30.1 \
+  --verifier-bundle ../promptguard-model/runs/verifier/creddata-mmbert-small/model
 ```
+
+- **온프레미스 GPU로 채점할 때:** `src/detector/profiles/onprem.env`를 복사해 번들 경로 자리(`<…>`)를 채운 뒤 `--env-file`로 넘깁니다. ml-span·ml-v9·검증기의 장치, timeout, 체크포인트·번들을 `detector.json`을 고치지 않고 바꿉니다. 자리를 채우지 않은 파일이면 실행기가 멈춥니다. 각 실행이 실제로 쓴 장치·timeout·번들 이름(경로 없이)은 `eval_config.json`과 보고서의 "실행 설정" 표에 남습니다. 자세한 내용은 [ML 탐지기](docs/ML_ADAPTERS.md)의 "측정용 덮어쓰기"에 있습니다.
 
 - **돌리는 범위:** CredData-trajectory test는 9개 설정 모두, 기존 9셋은 1·7·8·9번만 돌립니다. 실제 트래픽(openhands-feedback, SWE-Gym)은 "1,000줄당 오탐" 열을 채우려고 9개 설정 모두 돌립니다. 9번만 더하려면 `--configs 9-defaults-verifier --verifier-bundle DIR`로 돌리고 표는 `--report-only`로 다시 만듭니다. 9번이 들어 있는데 번들이 없으면 실행기는 아무것도 돌리지 않고 멈춥니다. 8번만 더하려면 `--configs 7-all 8-defaults-no-remask`로 돌리고 표는 `--report-only`로 다시 만듭니다(끝난 실행은 건너뜁니다).
 - **이어 돌리기:** 끝난 실행은 다시 돌리지 않습니다(`--force`로 다시). `--report-only`는 표만 다시 만듭니다.
