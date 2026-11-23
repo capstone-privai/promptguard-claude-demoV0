@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from .adapter import AdapterUnavailable
-from .adapters.span_models import DEFAULT_REPOSITORY, _real_weights, _resolve, path_digest
+from .adapters.span_models import DEFAULT_REPOSITORY, _resolve, path_digest, weights_present
 
 WEIGHT_FILES = ("model.safetensors", "pytorch_model.bin", "adapter_model.safetensors")
 
@@ -50,7 +50,8 @@ class VerifierStage:
             raise AdapterUnavailable("no verifier bundle configured (detector.json verifier.bundle or PG_VERIFIER_BUNDLE)")
         bundle = _resolve(self.repository, str(configured), str(configured))
         if factory is None:
-            if not (bundle / "bundle.json").is_file() or not any(_real_weights(bundle / name) for name in WEIGHT_FILES):
+            # A bundle in shards (model.safetensors.index.json and the shards it names) has weights too.
+            if not (bundle / "bundle.json").is_file() or not any(weights_present(bundle, name) for name in WEIGHT_FILES):
                 raise AdapterUnavailable(f"verifier bundle {bundle.name} is missing or has no weights")
             try:
                 from privai_model.verifier.runtime import CandidateVerifier as factory  # type: ignore[no-redef]
