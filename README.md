@@ -429,6 +429,29 @@ node $PG/src/launcher/system-prompt.cjs --detector-url http://127.0.0.1:<탐지�
 - **기록:** 실행별 `run_meta`에 Guard 사용 여부, `PG_GUARD_COUNT_TOKENS` 값, 시스템 프롬프트를 가렸는지를 남겨야 결과를 나눠 볼 수 있습니다.
 - **대안:** 하네스가 `claude` 대신 `promptguard run -- <인자>`로 띄우면 Guard와 시스템 프롬프트 가리기가 함께 됩니다. 다만 이때는 gold 조건과 실제 탐지기가 섞이므로 2·3번에만 씁니다.
 
+### 입력 크기별 지연 시간 (`scripts/latency/size_sweep.py`)
+
+입력 1·2·4·8·16·32·64 KB마다 탐지기 지연 시간을 구성별로 잽니다. 결과는 `outputs/latency/size-sweep-<날짜>.md`와 `.json`에 남습니다. 기존 `tests/performance/benchmark.py`는 그대로입니다.
+
+```bash
+python scripts/latency/size_sweep.py --gitleaks ../tools/gitleaks-8.30.1
+# 일부만: --configs a c --sizes 1 4 16 --scan-runs 2 --bridge-runs 10
+```
+
+- **텍스트:** 크기마다 서로 다른 20개입니다. Python·Java·JS 코드, 로그, .env, YAML, JSON 조각을 무작위로 섞어 크기를 바이트로 맞추고, 절반에 합성 비밀 1~3개를 심습니다. seed(기본 20261123)를 결과에 적습니다. 텍스트와 비밀 값은 어디에도 남기지 않습니다.
+- **구성:**
+  - (a) 기본값: 규칙 4개, ML 끔
+  - (b) 기본값 + `--policy verifier`: 검증기 번들이 없으면 "번들 없음"으로 건너뜀
+  - (c) 기본값 + ml-span: 모델 저장소의 v10. 없으면 건너뜀
+  - (d) 프로토타입: CredSweeper만
+- **재는 것:**
+  - 탐지기 한 번 호출: 워밍업 10회 뒤 크기·구성마다 200회(텍스트 20개 × 10회), `detector.scan`만
+  - Mod 경로: 실제 브리지(`src/detector/mcp-bridge.cjs` → 같은 구성의 worker)로 `scan_batch` 왕복, 크기마다 50회
+- **표:** p50, p90, p95, p99, 최대(ms), `PG_DETECTOR_TIMEOUT_MS`(기본 5000)를 넘은 횟수
+  - 4KB 행에는 중간발표 목표(p90 300ms) 달성 여부를 표시합니다.
+  - Mod 경로 표에는 훅 예산 10초 대비 비율을 표시합니다.
+- **함께 적는 것:** CPU 모델, 코어 수, 메모리, OS, Python, Node, gitleaks, CredSweeper 버전, 구성마다 탐지기 설정(정책, 합의, 모듈과 버전, 필터, 모델 장치·timeout)
+
 ## 검증 결과
 
 `majority` 정책, 3개 모듈 기준(이전 검증 결과):
