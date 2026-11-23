@@ -162,8 +162,25 @@ def numbers(run: Path, texts: Texts) -> dict[str, Any]:
         "removed": removed, "rules_over": rules_over, "findings": findings, "value_of": value_of,
         "remask_fp_edits": remask_fp_edits, "all_findings": valid,
         "scorer": (metrics.get("recall"), metrics.get("precision")),
+        # The scorer's own definitions differ per promptguard-data branch. creddata-trajectory-data: covered recall
+        # and character precision (it also reports exact_recall and counts.masked_chars). main: exact recall and edit
+        # precision (edits inside one gold span / edits). The check compares like with like (scorer_mismatches).
+        "scorer_kind": "character" if "exact_recall" in metrics or "masked_chars" in metrics.get("counts", {}) else "edit",
+        "edit_recount": (sum(1 for r in gold if r["status"] == "exact") / len(gold) if gold else None,
+                         sum(1 for r in edits if r.get("within_gold")) / len(edits) if edits else None),
         "verifier": list(jsonl(run / "verifier.jsonl")),
     }
+
+
+def scorer_mismatches(config: str, name: str, n: dict[str, Any]) -> list[str]:
+    """Where this report's recount differs from the scorer's metrics.json, under the scorer's own definitions."""
+    ours = (n["recall"], n["precision"]) if n["scorer_kind"] == "character" else n["edit_recount"]
+    labels = ("recall", "precision") if n["scorer_kind"] == "character" else ("정확 recall", "edit precision")
+    out = []
+    for label, mine, theirs in zip(labels, ours, n["scorer"]):
+        if mine is not None and theirs is not None and abs(mine - theirs) > 1e-9:
+            out.append(f"- {config} {name}: {label} {mine:.4f}, 채점기 {theirs:.4f}")
+    return out
 
 
 def newly_missed(base: dict[str, Any], run: dict[str, Any]) -> Counter:
@@ -327,11 +344,12 @@ def build(out: Path, main_root: Path, branch_root: Path) -> Path:
         lines.append(f"| {label} | {fmt(n['recall'])} | {fmt(n['precision'])} | {fmt(n['f2'])} | {n['missed_spans']} / {n['missed_values']} | "
                      f"{n['remask_fp']} |" + "".join(f" {cell} |" for cell in fp) + f" {filtered} | {sum(lost.values()) if base else '-'} | {remask_cell(runs, config, cred)} |")
     for (config, name), n in runs.items():
-        recall, precision = n["scorer"]
-        if recall is not None and n["recall"] is not None and abs(recall - n["recall"]) > 1e-9:
-            warnings.append(f"- {config} {name}: recall {n['recall']:.4f}, 채점기 {recall:.4f}")
-        if precision is not None and n["precision"] is not None and abs(precision - n["precision"]) > 1e-9:
-            warnings.append(f"- {config} {name}: precision {n['precision']:.4f}, 채점기 {precision:.4f}")
+        warnings += scorer_mismatches(config, name, n)
+    if any(n["scorer_kind"] == "edit" for n in runs.values()):
+        # Said at the top: the scorer's recall and precision are not this table's on that branch.
+        lines.insert(4, "- **채점기 브랜치 주의:** 일부 실행의 채점기가 덮은 recall·글자 precision을 내지 않는 브랜치(예: promptguard-data main)다. "
+                        "그 채점기의 recall은 정확 recall, precision은 edit precision이다. 이 표의 recall·precision은 실행기가 per_span·per_edit에서 "
+                        "다시 센 덮은 recall·글자 precision이고, 채점기와의 비교는 그 채점기의 정의(정확 recall, edit precision)로 한다.")
     lines += ["", "## 새로 놓친 정답 (기준 설정에서는 덮었고 이 설정에서는 못 덮은 span)", ""]
     lines += (["| 설정 | 기준 | 정답 유형 | 기준에서 찾은 규칙 | 이 설정에서 덮은 거르기 | 값 모양 | span |", "|---|---|---|---|---|---|---|", *missed_rows]
               if missed_rows else ["없음."])
