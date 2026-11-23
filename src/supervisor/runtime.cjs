@@ -7,7 +7,7 @@ const { spawn, spawnSync } = require('child_process')
 const { ManagedProcess, delay, stopProcessTree } = require('./process.cjs')
 const { getJson, waitForJson } = require('./http.cjs')
 const { StateStore } = require('./state.cjs')
-const { filterSettingsMismatch } = require('./filter-settings.cjs')
+const { filterSettingsMismatch, modelSettingsMismatch } = require('./filter-settings.cjs')
 const { detectorScan, maskSystemPromptArgs } = require('../launcher/system-prompt.cjs')
 
 const LOG_RANK = Object.freeze({ error: 0, warn: 1, info: 2, debug: 3 })
@@ -395,12 +395,21 @@ class RuntimeSupervisor {
 
   // Both detector workers must run the same PG_DETECTOR_FILTERS / PG_DETECTOR_FILTER_DUMMY. A difference is named
   // (no values) at startup and handed to the Final Guard, whose blocks then say "필터 설정 불일치".
+  // The model settings too (PG_ML_CHECKPOINT, PG_VERIFIER_BUNDLE, PG_DETECTOR_CANDIDATE_POLICY): names only, the
+  // workers report digests and the warning carries neither them nor a path.
   checkFilterSettings() {
-    const mismatch = filterSettingsMismatch(this.service('transformDetector').readyValue, this.service('verificationDetector').readyValue)
+    const transform = this.service('transformDetector').readyValue
+    const verification = this.service('verificationDetector').readyValue
+    const filters = filterSettingsMismatch(transform, verification)
+    const models = modelSettingsMismatch(transform, verification)
+    const mismatch = [...filters, ...models]
     const guard = this.service('finalGuard')
     guard.env = { ...guard.env, PG_DETECTOR_FILTER_MISMATCH: mismatch.join(',') }
-    if (mismatch.length) {
-      this.log('warn', `Warning: detector filter settings differ between the Transform and Verification detectors (${mismatch.join(', ')}). Give both the same values; until then the Final Guard may block text the Native Mod let through.`)
+    if (filters.length) {
+      this.log('warn', `Warning: detector filter settings differ between the Transform and Verification detectors (${filters.join(', ')}). Give both the same values; until then the Final Guard may block text the Native Mod let through.`)
+    }
+    if (models.length) {
+      this.log('warn', `Warning: detector model settings differ between the Transform and Verification detectors (${models.join(', ')}). Give both the same values; until then the Final Guard may block text the Native Mod let through.`)
     }
     return mismatch
   }

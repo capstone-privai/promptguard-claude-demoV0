@@ -7,6 +7,7 @@ const path = require('node:path')
 
 const DEFAULT_MAX_BODY = 8 * 1024 * 1024
 const FILTER_SETTINGS = new Set(['PG_DETECTOR_FILTERS', 'PG_DETECTOR_FILTER_DUMMY'])
+const MODEL_SETTINGS = new Set(['PG_ML_CHECKPOINT', 'PG_VERIFIER_BUNDLE', 'PG_DETECTOR_CANDIDATE_POLICY'])
 const DEFAULT_DETECTOR_TIMEOUT = 5_000
 const DEFAULT_UPSTREAM_TIMEOUT = 120_000
 const DEFAULT_BODY_TIMEOUT = 15_000
@@ -138,6 +139,9 @@ function loadConfig(env = process.env) {
     // PG_DETECTOR_FILTERS / PG_DETECTOR_FILTER_DUMMY settings: the names that differ, never values.
     filterMismatch: Object.freeze(String(env.PG_DETECTOR_FILTER_MISMATCH || '').split(',')
       .map(name => name.trim()).filter(name => FILTER_SETTINGS.has(name))),
+    // The same list may name model settings (ml-span checkpoint, verifier bundle, candidate policy); names only.
+    modelMismatch: Object.freeze(String(env.PG_DETECTOR_FILTER_MISMATCH || '').split(',')
+      .map(name => name.trim()).filter(name => MODEL_SETTINGS.has(name))),
     countTokensMode: parseCountTokensMode(env.PG_GUARD_COUNT_TOKENS),
   })
 }

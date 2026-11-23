@@ -24,6 +24,7 @@ treat as a blocked scan. Nothing here logs or returns candidate text.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -241,6 +242,9 @@ class MLV9Adapter(_ModelRepoAdapter):
         # product default stays "cpu". ml-qwen keeps its own "device".
         self.device = str(os.environ.get("PG_ML_DEVICE") or options.get("device", "cpu"))
         self.checkpoint_name = checkpoint.name
+        # The supervisor compares this between the Mod's and the Guard's workers (model_settings): a digest of the
+        # resolved folder, never the path itself.
+        self.checkpoint_digest = path_digest(checkpoint)
         try:
             self.model = factory(checkpoint, device=self.device)
         except Exception as exc:
@@ -349,6 +353,11 @@ class QwenAdapter(_ModelRepoAdapter):
                 key = (base + int(finding.start), base + int(finding.end))
                 found[key] = max(found.get(key, 0.0), float(finding.score))
         return [(start, end, score) for (start, end), score in sorted(found.items())]
+
+
+def path_digest(path: Path) -> str:
+    """16 hex characters of sha256 over the resolved path: equal paths compare equal, the path is not kept."""
+    return hashlib.sha256(str(Path(path).resolve()).encode("utf-8")).hexdigest()[:16]
 
 
 def _bundle_id(path: Path, fallback: str) -> str:

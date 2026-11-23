@@ -101,6 +101,13 @@ class Detector:
             "skipped": self.skipped,
             **(self.filters.describe() if self.filters else {}),
             "filter_settings": filter_settings(),
+            # What the supervisor compares between the Mod's and the Guard's workers, besides filter_settings: the
+            # ml-span checkpoint and the verifier bundle as digests of their resolved paths, and the candidate policy.
+            "model_settings": {
+                "PG_ML_CHECKPOINT": next((adapter.checkpoint_digest for adapter in self.adapters if getattr(adapter, "family", None) == "ml_span"), None),
+                "PG_VERIFIER_BUNDLE": self.verifier.bundle_digest if self.verifier is not None else None,
+                "PG_DETECTOR_CANDIDATE_POLICY": self.candidate_policy,
+            },
             # Device, timeout and bundle name each model adapter and the verifier actually run with (no path).
             "runtime_settings": {
                 "adapters": {adapter.name: adapter.runtime_settings() for adapter in self.adapters if adapter.runtime_settings() is not None},

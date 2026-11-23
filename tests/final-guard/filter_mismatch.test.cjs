@@ -44,7 +44,7 @@ describe('Final Guard block reason with a filter settings mismatch', () => {
     start(path.join(ROOT, 'tests', 'final-guard', 'mock-upstream.cjs'), { PG_MOCK_UPSTREAM_PORT: String(upstream), PG_MOCK_SECRET_MARKER: MARKER })
     await waitOk(`http://127.0.0.1:${detector}/health`)
     await waitOk(`http://127.0.0.1:${upstream}/__status`)
-    for (const [name, mismatch] of [['mismatch', 'PG_DETECTOR_FILTERS'], ['same', '']]) {
+    for (const [name, mismatch] of [['mismatch', 'PG_DETECTOR_FILTERS'], ['same', ''], ['model', 'PG_ML_CHECKPOINT,PG_DETECTOR_CANDIDATE_POLICY'], ['both', 'PG_DETECTOR_FILTERS,PG_VERIFIER_BUNDLE']]) {
       const port = await freePort()
       start(path.join(ROOT, 'src', 'guard', 'final-guard.cjs'), {
         PG_GUARD_PORT: String(port),
@@ -71,6 +71,22 @@ describe('Final Guard block reason with a filter settings mismatch', () => {
     assert.match(error.message, /필터 설정 불일치/)
     assert.deepEqual(error.filter_settings_mismatch, ['PG_DETECTOR_FILTERS'])
     assert.ok(!JSON.stringify(error).includes(MARKER))
+  })
+
+  test('model settings: the block names them under their own heading, without values', async () => {
+    const { error } = await (await send(guards.model)).json()
+    assert.match(error.message, /모델 설정 불일치: PG_ML_CHECKPOINT, PG_DETECTOR_CANDIDATE_POLICY/)
+    assert.doesNotMatch(error.message, /필터 설정 불일치/)
+    assert.deepEqual(error.model_settings_mismatch, ['PG_ML_CHECKPOINT', 'PG_DETECTOR_CANDIDATE_POLICY'])
+    assert.equal(error.filter_settings_mismatch, undefined)
+  })
+
+  test('filter and model settings together', async () => {
+    const { error } = await (await send(guards.both)).json()
+    assert.match(error.message, /필터 설정 불일치: PG_DETECTOR_FILTERS/)
+    assert.match(error.message, /모델 설정 불일치: PG_VERIFIER_BUNDLE/)
+    assert.deepEqual(error.filter_settings_mismatch, ['PG_DETECTOR_FILTERS'])
+    assert.deepEqual(error.model_settings_mismatch, ['PG_VERIFIER_BUNDLE'])
   })
 
   test('with the same settings the block is as before', async () => {

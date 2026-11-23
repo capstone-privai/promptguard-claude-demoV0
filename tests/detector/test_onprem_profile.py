@@ -136,3 +136,42 @@ class ProfileFile(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ModelSettingsDigest(unittest.TestCase):
+    """describe()["model_settings"]: what the supervisor compares between the Mod's and the Guard's workers."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name) / "promptguard-model"
+        (self.repo / "src").mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def settings(self, env: dict, policy: str = "union") -> dict:
+        seen = Seen()
+        with mock.patch.dict(os.environ, env):
+            adapter = MLSpanAdapter("ml-span", {**ENTRY["ml-span"], "repository": str(self.repo)}, ROOT, factory=seen.span)
+            stage = VerifierStage({**CONFIG["verifier"], "repository": str(self.repo)}, ROOT, factory=seen.verifier) if policy == "verifier" else None
+            return Detector([adapter], ConsensusPolicy.parse("any"), candidate_policy=policy, verifier=stage).describe()["model_settings"]
+
+    def test_digests_follow_the_path_and_hold_no_path(self) -> None:
+        one = self.settings({"PG_ML_CHECKPOINT": "models/span-a"})
+        self.assertEqual(one, self.settings({"PG_ML_CHECKPOINT": "models/span-a"}))
+        self.assertNotEqual(one["PG_ML_CHECKPOINT"], self.settings({"PG_ML_CHECKPOINT": "models/span-b"})["PG_ML_CHECKPOINT"])
+        self.assertRegex(one["PG_ML_CHECKPOINT"], r"^[0-9a-f]{16}$")
+        self.assertEqual((one["PG_VERIFIER_BUNDLE"], one["PG_DETECTOR_CANDIDATE_POLICY"]), (None, "union"))
+        self.assertNotIn("span-a", json.dumps(one))
+
+    def test_verifier_bundle_and_policy(self) -> None:
+        a = self.settings({"PG_VERIFIER_BUNDLE": "runs/verifier/a"}, "verifier")
+        b = self.settings({"PG_VERIFIER_BUNDLE": "runs/verifier/b"}, "verifier")
+        self.assertEqual(a["PG_DETECTOR_CANDIDATE_POLICY"], "verifier")
+        self.assertNotEqual(a["PG_VERIFIER_BUNDLE"], b["PG_VERIFIER_BUNDLE"])
+        self.assertNotIn(self.tmp.name, json.dumps(a))
+
+    def test_rule_only_detector(self) -> None:
+        from pgdetector.adapters.patterns import PatternAdapter
+        detector = Detector([PatternAdapter("promptguard-rules", {}, ROOT)], ConsensusPolicy.parse("any"), candidate_policy="union")
+        self.assertEqual(detector.describe()["model_settings"], {"PG_ML_CHECKPOINT": None, "PG_VERIFIER_BUNDLE": None, "PG_DETECTOR_CANDIDATE_POLICY": "union"})

@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from .adapter import AdapterUnavailable
-from .adapters.span_models import DEFAULT_REPOSITORY, _real_weights, _resolve
+from .adapters.span_models import DEFAULT_REPOSITORY, _real_weights, _resolve, path_digest
 
 WEIGHT_FILES = ("model.safetensors", "pytorch_model.bin", "adapter_model.safetensors")
 
@@ -69,6 +69,7 @@ class VerifierStage:
         if not 0.0 <= self.threshold <= 1.0:
             raise AdapterUnavailable("verifier threshold is not a probability")
         self.bundle = bundle
+        self.bundle_digest = path_digest(bundle)
         self.version = f"{bundle.name}:{self.model.model_version}"
         timeout = os.environ.get("PG_ML_TIMEOUT_SECONDS") or options.get("timeout_seconds")
         self.timeout = float(timeout) if timeout is not None else None
