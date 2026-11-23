@@ -153,7 +153,7 @@ Claude Code에서 `!`로 직접 실행한 명령과 그 출력은 `prompt.submit
 
 8자 미만 값은 기본으로 단어 경계가 맞는 곳에서만 다시 가리고(`PG_REMASK_SHORT=boundary`), shell-aware는 함수 이름 단서로 잡는 4자 미만 위치 인자를 내지 않습니다(`PG_SHELL_POSITIONAL_MIN=4`). 이전 동작은 `substring`과 `1`입니다. 기준은 [짧은 값 재마스킹](docs/REMASK_FLOOR.md)에 있습니다.
 
-시스템 프롬프트의 자리표시자 안내(`PG_PLACEHOLDER_GUIDE`)와 Grep 패턴·Bash의 grep·rg·sed 인자의 `\[TYPE_N\]` 복원(`PG_RESTORE_ESCAPED`)도 기본으로 켜져 있습니다. `promptguard run`은 `--append-system-prompt`·`--system-prompt`(와 `-file` 형태)의 비밀을 Claude Code를 띄우기 전에 가립니다. 내용과 count_tokens 빈틈은 [자리표시자 안내와 빈틈](docs/PLACEHOLDER_GUIDE_AND_GAPS.md)에 있습니다.
+시스템 프롬프트의 자리표시자 안내(`PG_PLACEHOLDER_GUIDE`)와 Grep 패턴·Bash의 grep·rg·sed 인자의 `\[TYPE_N\]` 복원(`PG_RESTORE_ESCAPED`)도 기본으로 켜져 있습니다. 비밀 파일을 od·xxd·base64·글자 쪼개기 같은 방식으로 출력한 Bash 결과는 통째로 안내 문구로 바뀝니다(`PG_SECRET_DUMP_GUARD`, [비밀 파일 덤프 가드](docs/SECRET_DUMP_GUARD.md)). `promptguard run`은 `--append-system-prompt`·`--system-prompt`(와 `-file` 형태)의 비밀을 Claude Code를 띄우기 전에 가립니다. 내용과 count_tokens 빈틈은 [자리표시자 안내와 빈틈](docs/PLACEHOLDER_GUIDE_AND_GAPS.md)에 있습니다.
 
 ### 설정 한눈에 보기 (release/defaults-1120)
 
@@ -169,8 +169,10 @@ Mod와 Guard의 탐지기 worker는 같은 `pgdetector`(`src/detector/pgdetector
 | `PG_REMASK_SHORT` | `boundary` | `substring` | 8자 미만 값은 앞뒤에 `[A-Za-z0-9_]`가 붙지 않은 곳에서만 다시 가립니다 | 재마스킹 오탐 −91%, 새로 놓친 정답 0 | #24 |
 | `PG_SHELL_POSITIONAL_MIN` | `4` | `1` | shell-aware가 함수 이름 단서로 잡는 위치 인자 중 4자 미만은 내지 않습니다 | 위와 같은 묶음 | #24 |
 | `PG_RULE_HEX_KEY` | `on` | `off` | 키 이름(`key`, `api_key`, `secret_key` 등) 옆 따옴표 안의 32~64자 16진수를 `hex-key`로 찾습니다. Go의 `Key: String("…")`도 포함합니다. hash·sha·commit 같은 이름은 뺍니다 | recall +2.2%p, 실제 트래픽 오탐 증가 0 | #26 |
-| `PG_PLACEHOLDER_GUIDE` | `on` | `off` | 시스템 프롬프트 끝에 자리표시자 안내를 요청마다 한 번 넣습니다(`PG_RESTORE_ESCAPED`가 켜져 있으면 763자, 꺼져 있으면 627자) | 지표 2 멈춤 4→0, placeholder 잘못 보고 15→0 | #25 |
+| `PG_PLACEHOLDER_GUIDE` | `on` | `off` | 시스템 프롬프트 끝에 자리표시자 안내를 요청마다 한 번 넣습니다(`PG_RESTORE_ESCAPED`가 켜져 있으면 1,134자, 꺼져 있으면 998자). 비밀 파일이나 가려진 값을 od·xxd·hexdump·base64, 글자 쪼개기, 일부 자르기로 출력하지 말고 속성은 값을 출력하지 않는 명령으로 확인하라는 문장이 들어 있습니다 | 지표 2 멈춤 4→0, placeholder 잘못 보고 15→0 | #25 |
 | `PG_RESTORE_ESCAPED` | `on` | `off` | Grep의 `pattern`과 Bash의 grep·rg·sed 인자에서 `\[TYPE_N\]`을 같은 문법으로 이스케이프한 실제 값으로 복원합니다 | 위와 같은 묶음 | #25 |
+| `PG_SECRET_DUMP_GUARD` | `on` | `off` | Bash 명령이 비밀 파일로 보이는 경로(`.env`, `secrets/`, `*password*`, `*.pem` 등)를 변형·덤프 도구(od, xxd, hexdump, base64, base32, fold, `cut -c`, rev, `head -c`·`tail -c`·dd, `cat -A`·`-v`·`-e`·`-t`, `sed -n l`, 한 글자씩 뽑는 `grep -o`, 글자 사이에 넣는 sed, 글자 단위로 쪼개거나 `substr`로 자르는 awk·python·node·perl)로 읽으면, 그 명령의 출력 전체를 안내 문구 하나로 바꿉니다. `cat`·Read처럼 그대로 읽으면 지금처럼 탐지기와 placeholder로 가립니다 | 지표 2 g16·g20·t14에서 `od -c` 출력으로 비밀이 서버에 감 | #30 |
+| `PG_SECRET_FILE_PRELOAD` | `off` | `off` | `on`이면 위 경로를 이름에 담은 Bash 명령을 실행하기 전과 Read가 그런 경로를 열 때, 256바이트 이하 한 줄 파일의 앞뒤 공백을 뺀 내용(`secrets/` 안·정확한 이름 등은 3자 이상, 이름으로만 고른 파일은 8자 이상)을 금고에 미리 넣어 이후 어디에 나오든 재마스킹으로 가립니다 | 측정 전이라 끔 | #30 |
 | `PG_GUARD_COUNT_TOKENS` | `block` | `block` | `mask`이면 Final Guard가 count_tokens 요청에 한해 422 대신 탐지한 값을 자리표시자로 바꿔 보냅니다. `/v1/messages`는 그대로 막습니다 | 빈틈 확인 측정 전이라 그대로 | #25 |
 | `PG_PLACEHOLDER_PUBLIC_PREFIX` | `off` | `off` | `on`이면 공개 접두어를 남겨 가립니다(`sk_live_[STRIPE_SECRET_KEY_1]`) | 측정 안 함이라 그대로 | #21 |
 

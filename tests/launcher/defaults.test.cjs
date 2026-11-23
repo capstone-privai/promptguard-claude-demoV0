@@ -22,6 +22,8 @@ const MOD = {
   PG_REMASK: 'on',
   PG_REMASK_SHORT: 'boundary',
   PG_PLACEHOLDER_GUIDE: 'on',
+  PG_SECRET_DUMP_GUARD: 'on',
+  PG_SECRET_FILE_PRELOAD: 'off',
   PG_RESTORE_ESCAPED: 'on',
   PG_PLACEHOLDER_PUBLIC_PREFIX: 'off',
 }
