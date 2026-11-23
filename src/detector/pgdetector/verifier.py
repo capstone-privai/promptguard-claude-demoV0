@@ -57,8 +57,10 @@ class VerifierStage:
             except (ImportError, OSError) as exc:
                 raise AdapterUnavailable("verifier dependencies are not installed (torch, transformers)") from exc
         target = options.get("recall_target")
+        # PG_VERIFIER_DEVICE overrides detector.json's device (a GPU server for measurement); the default stays cpu.
+        self.device = str(os.environ.get("PG_VERIFIER_DEVICE") or options.get("device", "cpu"))
         try:
-            self.model = factory(bundle, device=str(options.get("device", "cpu")),
+            self.model = factory(bundle, device=self.device,
                                  recall_target=float(target) if target is not None else None,
                                  context_lines=int(options.get("context_lines", 3)))
         except Exception as exc:
@@ -76,6 +78,10 @@ class VerifierStage:
 
     def describe(self) -> dict[str, Any]:
         return {"name": self.name, "version": self.version, "threshold": self.threshold}
+
+    def runtime_settings(self) -> dict[str, Any]:
+        """What this stage runs with, for measurement records: the bundle's folder name, never its path."""
+        return {"device": self.device, "timeout_seconds": self.timeout, "bundle": self.bundle.name}
 
     def _call(self, func: Callable[[], Any]) -> Any:
         if self.timeout is None:

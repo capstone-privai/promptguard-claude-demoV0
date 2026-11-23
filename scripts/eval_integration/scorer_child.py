@@ -5,6 +5,7 @@ fresh by the system's pgdetector the scorer loads).
         --sessions SESSIONS.jsonl [--gold GOLD.jsonl] --out FOLDER
 
 Writes the scorer's run folder under FOLDER plus filters.jsonl (instrument.install_recorder) and eval_config.json
+(also the model overrides the run saw and the device, timeout and bundle name each model ran with, runtime.py)
 (the configuration and its settings, no text).
 """
 
@@ -18,7 +19,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from configs import ALL_SETTINGS, CONFIGS  # noqa: E402
-from instrument import install_boundary, install_no_remask, install_recorder, install_verifier_recorder  # noqa: E402
+from instrument import install_boundary, install_no_remask, install_recorder, install_runtime_recorder, install_verifier_recorder  # noqa: E402
+from runtime import recorded_overrides, runtime_record  # noqa: E402
 
 
 def run_folders(out: Path) -> set[Path]:
@@ -47,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
 
     rows: list[dict] = []
     install_recorder(promptguard_adapter, rows)
+    adapters: list = []
+    install_runtime_recorder(promptguard_adapter, adapters)
     if (env or {}).get("PG_REMASK_SHORT") == "boundary":
         install_boundary(promptguard_adapter)
     if (env or {}).get("PG_REMASK") == "off":
@@ -71,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         with (new[0] / "verifier.jsonl").open("w", encoding="utf-8") as handle:
             for row in verifier_rows:
                 handle.write(json.dumps(row) + "\n")
-    (new[0] / "eval_config.json").write_text(json.dumps({"config": args.config, "settings": env}, indent=2) + "\n", encoding="utf-8")
+    (new[0] / "eval_config.json").write_text(json.dumps({"config": args.config, "settings": env, "overrides": recorded_overrides(os.environ), "runtime": runtime_record(adapters)}, indent=2) + "\n", encoding="utf-8")
     return code
 
 

@@ -113,3 +113,24 @@ cd sample-protected-project
 - worker 준비 대기 시간은 180초가 된다(`--readiness-timeout-ms`로 바꿀 수 있다).
 - 학습 데이터의 channel은 CredData-trajectory 행의 source다. 실행 중에는 탐지기가 받은 scan source가 그 자리에 들어간다. 두 값의 어휘가 다르면 모델이 학습 때 못 본 입력을 받는다.
 - 테스트(`tests/detector/test_verifier.py`)는 가짜 모델로 정책과 fail-closed 동작만 검증한다. 실제 검증기로 탐지기를 돌린 결과는 validation 정책 비교(F2 0.784, mmBERT-small)와 맞는지 따로 확인해야 한다.
+
+## 측정용 덮어쓰기 (온프레미스 GPU)
+
+제품 기본값(`detector.json`: ml-span·ml-v9·검증기 `device: cpu`, `timeout_seconds: 4`)은 그대로 두고, 측정할 때만 환경변수로 덮어쓴다.
+
+| 환경변수 | 적용 대상 | 뜻 |
+|---|---|---|
+| `PG_ML_DEVICE` | ml-span, ml-v9 | `device`를 덮어쓴다(`cpu`, `cuda`, `mps`, `auto`). ml-qwen은 `detector.json`의 `device`를 그대로 쓴다 |
+| `PG_VERIFIER_DEVICE` | 검증기 | 검증기의 `device`를 덮어쓴다 |
+| `PG_ML_TIMEOUT_SECONDS` | ml-span, ml-v9, ml-qwen, 검증기 | `timeout_seconds`를 덮어쓴다. ml-span·ml-v9의 `scope: full` 기본 25초도 덮는다(이전부터 그랬고 테스트로 고정) |
+| `PG_ML_CHECKPOINT` | ml-span | 체크포인트(번들 폴더). 모델 저장소 기준 상대 경로 또는 절대 경로. ml-v9는 v9에 고정이라 쓰지 않는다 |
+| `PG_VERIFIER_BUNDLE` | 검증기 | 검증기 번들 폴더(이전부터 있음) |
+
+- **예시 파일:** `src/detector/profiles/onprem.env` (device cuda, timeout 60초, 번들 경로 자리)
+- **지표 1 오프라인 채점용이다.** 지표 2(실제 Claude Code)는 브리지 5초(`PG_DETECTOR_TIMEOUT_MS` 기본값)·훅 10초 제한이 있어 이 timeout이 그대로 적용되지 않는다.
+- **측정 실행기:** `scripts/eval_integration/run.py --env-file FILE`이 파일의 값을 모든 실행에 넘긴다. 실행마다 `eval_config.json`에 기록한다.
+  - `overrides`: 실행이 본 덮어쓰기 값. 경로는 마지막 폴더 이름만 남긴다.
+  - `runtime`: 탐지기가 실제로 쓴 후보 정책, 켜진 모듈, 모델별 장치·timeout·번들 이름
+  - 보고서의 "실행 설정" 표에도 낸다.
+- **기록되는 값:** 탐지기는 `describe()["runtime_settings"]`로 모델 모듈과 검증기의 장치·timeout·번들 폴더 이름을 알려 준다. 경로는 내지 않는다.
+- **채울 자리:** 예시 파일의 `<…>` 자리를 채우지 않고 `--env-file`로 넘기면 실행기가 멈춘다. 없는 번들로 돌면 ml-span이 조용히 빠진 채(선택 모듈) 측정되기 때문이다.

@@ -27,7 +27,7 @@ import json
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 
 from configs import ALL_SETS, BASELINE, CONFIGS
 
@@ -262,6 +262,27 @@ def verifier_stats(run: dict[str, Any]) -> dict[str, int]:
     return out
 
 
+def runtime_lines(records: dict[str, dict[str, Any]]) -> list[str]:
+    """Per configuration: candidate policy, each model's device, timeout and bundle name, the verifier's, and the
+    model overrides the run saw (eval_config.json). Names only."""
+    def model(settings: Mapping[str, Any] | None) -> str:
+        if not settings:
+            return "-"
+        timeout = settings.get("timeout_seconds")
+        return f"{settings.get('device')}, {'-' if timeout is None else f'{timeout}초'}, {settings.get('checkpoint') or settings.get('bundle')}"
+    rows = []
+    for config, record in records.items():
+        runtime = record.get("runtime") or {}
+        settings = runtime.get("runtime_settings") or {}
+        adapters = "; ".join(f"{name}: {model(value)}" for name, value in (settings.get("adapters") or {}).items()) or "모델 없음"
+        overrides = ", ".join(f"{k}={v}" for k, v in (record.get("overrides") or {}).items()) or "-"
+        rows.append(f"| {config} | {runtime.get('candidate_policy') or '-'} | {adapters} | {model(settings.get('verifier'))} | {overrides} |")
+    if not rows:
+        return []
+    return ["", "## 실행 설정 (실제로 쓴 값, 이름만)", "",
+            "| 설정 | 후보 정책 | 모델 (장치, timeout, 번들) | 검증기 (장치, timeout, 번들) | 덮어쓴 환경변수 |", "|---|---|---|---|---|", *rows]
+
+
 def fmt(value: Any) -> str:
     return "-" if value is None else f"{value:.4f}" if isinstance(value, float) else str(value)
 
@@ -349,6 +370,12 @@ def build(out: Path, main_root: Path, branch_root: Path) -> Path:
                 if n:
                     lines.append(f"| {name} | {config} | {fmt(n['recall'])} | {fmt(n['precision'])} | {fmt(n['f2'])} | {n['missed_spans']} / {n['missed_values']} | "
                                  f"{n['remask_fp']} | {fmt(n['fp_per_1k'])} | {remask_cell(runs, config, name)} |")
+    records = {}
+    for config in manifest["configs"]:
+        run = find_run(out / config / cred)
+        if run:
+            records[config] = json.loads((run / "eval_config.json").read_text(encoding="utf-8"))
+    lines += runtime_lines(records)
     if warnings:
         lines += ["", "## 채점기 값과 다른 곳 (이 보고서가 다시 센 값과 채점기 metrics.json)", "", *warnings]
     path = out / "report.md"

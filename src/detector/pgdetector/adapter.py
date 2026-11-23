@@ -58,3 +58,10 @@ class DetectorAdapter(ABC):
         The ensemble adds these to the detector filter counts (PG_DETECTOR_FILTERS). Counts only, never values.
         """
         return None
+
+    def runtime_settings(self) -> Mapping[str, Any] | None:
+        """Settings this adapter actually runs with (device, timeout, bundle folder name), for measurement records.
+
+        Model adapters override it; rule adapters have none. Names only, never a path.
+        """
+        return None

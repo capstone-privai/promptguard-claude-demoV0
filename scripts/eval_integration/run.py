@@ -12,6 +12,8 @@ character precision, F2, per_finding.jsonl). promptguard-data is only read.
 - The nine sets (--nine): configurations 1, 7, 8 and 9 only (configs.ALL_SETS).
 - Real traffic (--traffic, default the --nine files named openhands-feedback and SWE-Gym): all nine, for the
   false positives per 1,000 lines column.
+- --env-file FILE (src/detector/profiles/onprem.env): model device, timeout and bundles for every run, on top of
+  detector.json, which stays as it is. Each run records what it actually used (eval_config.json; report "실행 설정").
 - Configuration 1 runs main 668c2c1 from a detached worktree (--main-root, made under --out when not given).
 - Configuration 9 (new defaults + --policy verifier) needs the verifier bundle: --verifier-bundle DIR or
   PG_VERIFIER_BUNDLE, and the model repository detector.json names (promptguard-model).
@@ -66,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--gitleaks", type=Path, help="folder holding the gitleaks binary, put first on PATH")
     parser.add_argument("--verifier-bundle", type=Path, help="verifier bundle for configuration 9 (or PG_VERIFIER_BUNDLE)")
+    parser.add_argument("--env-file", type=Path, help="settings for every run, e.g. src/detector/profiles/onprem.env (on-prem GPU scoring)")
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--report-only", action="store_true")
@@ -90,6 +93,14 @@ def main(argv: list[str] | None = None) -> int:
     if not args.report_only:
         main_root = main_worktree(out, args.main_root) if "1-main" in args.configs else None
         env = dict(os.environ)
+        if args.env_file:
+            from runtime import read_env_file
+
+            try:
+                env.update(read_env_file(args.env_file))
+            except ValueError as error:
+                print(f"--env-file: {error}", file=sys.stderr)
+                return 2
         if args.verifier_bundle:
             env["PG_VERIFIER_BUNDLE"] = str(args.verifier_bundle.resolve())
         if any(c in NEEDS_VERIFIER for c in args.configs) and not env.get("PG_VERIFIER_BUNDLE"):

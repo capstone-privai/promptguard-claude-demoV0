@@ -101,6 +101,11 @@ class Detector:
             "skipped": self.skipped,
             **(self.filters.describe() if self.filters else {}),
             "filter_settings": filter_settings(),
+            # Device, timeout and bundle name each model adapter and the verifier actually run with (no path).
+            "runtime_settings": {
+                "adapters": {adapter.name: adapter.runtime_settings() for adapter in self.adapters if adapter.runtime_settings() is not None},
+                "verifier": self.verifier.runtime_settings() if self.verifier is not None else None,
+            },
         }
 
     def collect(self, texts: Sequence[str]) -> tuple[list[Ballots], list[str]]:
