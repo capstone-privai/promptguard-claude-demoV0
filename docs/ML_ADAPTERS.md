@@ -17,7 +17,7 @@
 ## 준비
 
 1. 민준 저장소를 데모 저장소 **옆 폴더**에 둔다. 기본 경로는 `src/detector` 기준 `../../../promptguard-model`, 즉 데모 저장소와 같은 부모 폴더다. 다른 곳이면 `detector.json`의 `repository`를 바꾼다.
-2. 그 폴더에서 `git pull`과 `git lfs pull`을 실행한다. 가중치가 LFS 포인터 상태(1KB 미만)면 `detector.json`에서 켠 모듈은 시작할 때 건너뛰고 이유를 출력한다. `--enable`이나 `PG_DETECTOR_ENABLE`로 이름을 지정해 켰는데 쓸 수 없으면 PromptGuard가 시작하지 않는다.
+2. 그 폴더에서 `git pull`과 `git lfs pull`을 실행한다. 가중치가 LFS 포인터 상태(1KB 미만)면 `detector.json`에서 켠 모듈은 시작할 때 건너뛰고 이유를 출력한다. 여러 파일로 나뉜 가중치(`save_pretrained`가 큰 모델에 쓰는 `model.safetensors.index.json`과 `model-0000x-of-0000y.safetensors`)도 읽는다. 이때는 index에 적힌 조각이 모두 실제 가중치여야 하고, 조각 하나라도 없거나 LFS 포인터면 같은 이유로 건너뛴다(ml-span, ml-v9, 검증기). `--enable`이나 `PG_DETECTOR_ENABLE`로 이름을 지정해 켰는데 쓸 수 없으면 PromptGuard가 시작하지 않는다.
 3. 데모 `.venv`에 `torch`, `transformers>=4.51,<5`, `numpy`, `peft>=0.13,<1`를 설치한다. 민준 패키지는 설치하지 않아도 된다. adapter가 `promptguard-model/src`를 import 경로에 넣는다.
 4. Qwen은 처음 실행할 때 베이스 모델(약 1GB)을 Hugging Face에서 받는다. 2026-10-29 세훈 PC에서 첫 로딩은 468초였다(대부분 다운로드). PromptGuard를 켜기 전에 확인 스크립트로 한 번 받아 두고, 모델을 켤 때는 worker 준비 대기 시간을 늘린다(`PG_READINESS_TIMEOUT_MS`, 기본 30000).
 
@@ -90,6 +90,10 @@ cd sample-protected-project
 탐지기는 후보마다 strong/ambiguous를 붙인다. `candidate_policy: "verifier"`는 민준 저장소의 검증기 계획(`docs/ml_span/VERIFIER_PLAN.md`)의 "strong + 검증기" 정책이다.
 
 - 후보의 strength는 `majority`와 같다. 다수결이 남긴 span 안에 있거나 어떤 규칙이 강한 근거를 냈으면 strong, 아니면 ambiguous다.
+- **고신뢰 규칙은 strong이다.** `src/detector/high-confidence-rules.json`의 규칙이 찾은 후보는, 그 탐지기가 moderate로 냈어도 strong이 되어 검증기 점수와 상관없이 가린다.
+  - 해당 규칙: CredSweeper의 Bearer Authorization, AWS Multi, PASETO Token, Google API Key, CURL User Password, Gitleaks의 curl-auth-header, gcp-api-key
+  - 후보의 evidence에는 탐지기가 낸 원래 confidence가 그대로 남는다.
+  - strength는 `verifier` 정책만 쓰므로 `union`·`majority` 결과는 같다.
 - strong 후보는 가린다. ambiguous 후보는 검증기의 P(MASK)가 기준값 이상일 때만 가린다. 나머지 ambiguous 후보는 가리지 않는다.
 - 검증기는 `privai_model.verifier.runtime.CandidateVerifier`다. 로컬용 mmBERT 후보 분류기와 서버용 Qwen LoRA 검증기 번들을 모두 읽는다. 모델은 학습 때와 같은 코드(`verifier.candidates.candidate_records`)로 만든 입력을 받는다.
 - 기준값은 번들에 들어 있다(validation에서 recall 0.99로 고정). `recall_target`으로 번들에 있는 다른 값(예: 0.95)을 고를 수 있다.

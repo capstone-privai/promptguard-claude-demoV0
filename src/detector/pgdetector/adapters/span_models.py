@@ -63,6 +63,29 @@ def _real_weights(path: Path) -> bool:
     return path.is_file() and path.stat().st_size >= 1024
 
 
+def weights_present(folder: Path, name: str) -> bool:
+    """The weights file ``name`` in ``folder``, whole or in shards.
+
+    save_pretrained splits a large model (7B, 14B) into model-0000x-of-0000y.safetensors with an index,
+    ``<name>.index.json``, whose weight_map names each tensor's shard. Present when the single file is real, or when the
+    index lists shards and every one of them is real (a shard left as a Git LFS pointer, or missing, is not).
+    """
+    if _real_weights(folder / name):
+        return True
+    index = folder / f"{name}.index.json"
+    try:
+        weight_map = json.loads(index.read_text(encoding="utf-8")).get("weight_map")
+    except (OSError, ValueError, AttributeError):
+        return False
+    if not isinstance(weight_map, dict) or not weight_map:
+        return False
+    shards = {str(shard) for shard in weight_map.values()}
+    # A shard name is a file next to the index; anything with a folder in it is not a shard save_pretrained writes.
+    if any(Path(shard).name != shard for shard in shards):
+        return False
+    return all(_real_weights(folder / shard) for shard in shards)
+
+
 class _ModelRepoAdapter(DetectorAdapter):
     """Shared plumbing: locate the model repo, import lazily, gate, serialize, time out."""
 
@@ -230,7 +253,7 @@ class MLV9Adapter(_ModelRepoAdapter):
                 self.timeout = float(options.get("full_timeout_seconds", 25))
         checkpoint = self._bundle_path(options, "checkpoint", "privai_model.ml_span.runtime", "models/span-detector-v9")
         if factory is None:
-            if not _real_weights(checkpoint / "model.safetensors"):
+            if not weights_present(checkpoint, "model.safetensors"):
                 raise AdapterUnavailable(f"{checkpoint.name} weights missing (run git lfs pull in the model repository)")
             try:
                 from privai_model.ml_span.runtime import MLSpanDetector as factory  # type: ignore[no-redef]

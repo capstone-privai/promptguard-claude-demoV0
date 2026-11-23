@@ -19,7 +19,7 @@ from .adapters import ADAPTER_TYPES
 from .consensus import ConsensusPolicy, vote
 from . import settings
 from .core import CANONICAL_TYPES, MAX_SPAN, normalize, value_hash
-from .filters import Filters, filter_settings, public_prefix_rows
+from .filters import Filters, filter_settings, high_confidence_rules, public_prefix_rows
 from .verifier import VerifierStage
 
 
@@ -78,6 +78,13 @@ class Detector:
         self.public_placeholder = public_placeholder_pattern()
         # PG_DETECTOR_FILTERS / PG_DETECTOR_FILTER_DUMMY (filters.py): None when both are off (FILTERS is on by default).
         self.filters = Filters.from_env()
+        # (adapter, rule_id) pairs of src/detector/high-confidence-rules.json, the list the filters never filter. A
+        # candidate one of them found is strong (_decorate_candidates) whatever confidence the adapter gave it:
+        # CredSweeper reports Bearer Authorization, AWS Multi, PASETO Token, Google API Key and CURL User Password,
+        # and Gitleaks curl-auth-header and gcp-api-key, as moderate, and candidate_policy "verifier" would otherwise
+        # leave them to the verifier. Only strength changes, which only "verifier" reads: union and majority results
+        # are the same.
+        self.high_confidence = high_confidence_rules()
         # The filter counts of the texts the current thread's last collect() saw, read by scan_many.
         self._filtered = threading.local()
 
@@ -192,6 +199,14 @@ class Detector:
         findings, normalize_errors = normalize(raw, text, source)
         return findings, sorted(set(errors + normalize_errors))
 
+    def high_confidence_spans(self, text: str, source: str, ballots: Mapping[str, Sequence[RawFinding]]) -> list[tuple[int, int]]:
+        """Spans (in the candidates' offsets) that a high-confidence rule found, normalized like the candidates."""
+        chosen = {name: [finding for finding in found if (name, finding.rule_id) in self.high_confidence] for name, found in ballots.items()}
+        if not any(chosen.values()):
+            return []
+        spans, _ = self.decide(text, source, chosen, 1, candidate_scope=True)
+        return [(span["start"], span["end"]) for span in spans]
+
     def candidate_decide(self, text: str, source: str, ballots: Mapping[str, Sequence[RawFinding]]) -> tuple[list[dict[str, Any]], list[str]]:
         candidates, errors = self.decide(text, source, ballots, 1, candidate_scope=True, include_evidence=True)
         return candidates, errors
@@ -218,7 +233,7 @@ class Detector:
             findings, normalize_errors = normalize(raw, text, source)
             candidates, candidate_errors = self.candidate_decide(text, source, ballots)
             hashes = [candidate.get("value_hash") for candidate in candidates]
-            _decorate_candidates(candidates, findings)
+            _decorate_candidates(candidates, findings, self.high_confidence_spans(text, source, ballots))
             verifier_errors: list[str] = []
             if self.verifier is not None:
                 findings, verifier_errors = self.verified_findings(text, source, candidates, hashes)
@@ -284,14 +299,19 @@ def _injected_findings(mode: str, text: str) -> list[dict[str, Any]]:
     return []
 
 
-def _decorate_candidates(candidates: list[dict[str, Any]], protected: list[dict[str, Any]]) -> None:
-    """Mark legacy protection and evidence strength without retaining raw values."""
+def _decorate_candidates(candidates: list[dict[str, Any]], protected: list[dict[str, Any]], high_confidence: Sequence[tuple[int, int]] = ()) -> None:
+    """Mark legacy protection and evidence strength without retaining raw values.
+
+    Strong: inside a span the vote kept (legacy), some adapter's evidence is strong, or a high-confidence rule found
+    it (high_confidence: those rules' spans). The evidence keeps each adapter's own confidence.
+    """
     protected_spans = [(item["start"], item["end"]) for item in protected]
     for candidate in candidates:
         legacy = any(candidate["start"] < end and candidate["end"] > start for start, end in protected_spans)
+        listed = any(candidate["start"] < end and candidate["end"] > start for start, end in high_confidence)
         evidence = candidate.get("evidence", [])
         candidate["legacy_protected"] = legacy
-        candidate["strength"] = "strong" if legacy or any(row.get("strength") == "strong" for row in evidence) else "ambiguous"
+        candidate["strength"] = "strong" if legacy or listed or any(row.get("strength") == "strong" for row in evidence) else "ambiguous"
         candidate.pop("value_hash", None)
 
 
