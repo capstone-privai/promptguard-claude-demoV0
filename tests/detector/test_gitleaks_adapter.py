@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -65,9 +64,10 @@ class GitleaksAdapterTests(unittest.TestCase):
         self.assertTrue(any(alone))
 
     def test_a_batch_runs_one_process(self) -> None:
-        real = subprocess.run
+        # One gitleaks process takes the whole batch's stream (a waiting one with PG_GITLEAKS_PRESPAWN=on).
+        real = self.adapter._finish
         calls = []
-        with mock.patch("pgdetector.adapters.gitleaks.subprocess.run", side_effect=lambda *a, **k: calls.append(1) or real(*a, **k)):
+        with mock.patch.object(self.adapter, "_finish", side_effect=lambda *a, **k: calls.append(1) or real(*a, **k)):
             self.adapter.scan_many(TEXTS * 4)
         self.assertEqual(len(calls), 1)
 
