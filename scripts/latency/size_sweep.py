@@ -396,8 +396,9 @@ def main(argv: list[str] | None = None) -> int:
         result["configs"][key] = config
     args.out.mkdir(parents=True, exist_ok=True)
     stem = args.out / f"size-sweep-{result['date']}"
-    stem.with_suffix(".json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    stem.with_suffix(".md").write_text(markdown(result), encoding="utf-8")
+    # LF on every OS, so the committed results do not change with the machine they ran on.
+    stem.with_suffix(".json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    stem.with_suffix(".md").write_text(markdown(result), encoding="utf-8", newline="\n")
     print(f"{stem}.md", file=sys.stderr)
     return 0
 
