@@ -18,6 +18,7 @@ const DETECTOR = {
   PG_SHELL_POSITIONAL_MIN: '4',
   PG_PLACEHOLDER_PUBLIC_PREFIX: 'off',
   PG_ML_SHORT_VALUES: 'strong',
+  PG_GITLEAKS_PRESPAWN: 'on',
 }
 const MOD = {
   PG_REMASK: 'on',

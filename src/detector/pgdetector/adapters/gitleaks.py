@@ -5,23 +5,38 @@ code point spans. Gitleaks' column numbers are byte-based and off by one in
 places, so a finding is located by searching its ``Match`` on the reported
 lines and its ``Secret`` inside that match.
 
-A batch runs one process: starting gitleaks costs about 0.2 s on Windows (0.3 s
-per call in all), against a few milliseconds of scanning, so the texts go in one
-stdin stream between boundary lines and each finding is mapped back by its line.
-Nothing is written to disk.
+A batch runs one process: starting gitleaks costs about 0.3 s (it reads its
+config and compiles its rules before it reads stdin), against a few milliseconds
+of scanning, so the texts go in one stdin stream between boundary lines and each
+finding is mapped back by its line. Nothing is written to disk.
+
+PG_GITLEAKS_PRESPAWN (default on) keeps one process, started with the same
+command, cwd and env, waiting on stdin, so a call only pays the scan; after each
+call the next one is started in the background. A waiting process that has died,
+or fails on the write, is replaced once on the spot (the off behaviour); a second
+failure raises, which the ensemble reports as ADAPTER_FAILURE (fail-closed). A
+call that finds the waiting process taken by another call starts its own rather
+than wait. The timeout counts from the write. The waiting process is killed when
+the adapter is closed or collected and at interpreter exit; if the detector
+process is killed outright, its end of the stdin pipe closes and gitleaks exits
+on the empty input.
 """
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
 import secrets
 import shutil
 import subprocess
+import threading
+import weakref
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .. import settings
 from ..adapter import AdapterUnavailable, DetectorAdapter, RawFinding
 from ..core import assigned_variable, pem_body_lines, type_for
 
@@ -29,6 +44,36 @@ from ..core import assigned_variable, pem_body_lines, type_for
 NEWLINE = re.compile(r"\n")
 # Prefix-anchored rules; everything else (generic-api-key, ...) is entropy-based.
 STRONG_RULES = re.compile(r"private-key|github|jwt|aws|slack|stripe|gitlab|npm|openai|anthropic")
+
+# Adapters holding a waiting process; closed at interpreter exit (a normal exit or an uncaught exception).
+_OPEN: "weakref.WeakSet[GitleaksAdapter]" = weakref.WeakSet()
+
+
+@atexit.register
+def _close_all() -> None:
+    for adapter in list(_OPEN):
+        adapter.close()
+
+
+class _Stale(Exception):
+    """The waiting process could not take the stream: it had died, or the write failed."""
+
+
+def _discard(process: subprocess.Popen) -> None:
+    try:
+        process.kill()
+    except OSError:
+        pass
+    for pipe in (process.stdin, process.stdout, process.stderr):
+        try:
+            if pipe:
+                pipe.close()
+        except OSError:
+            pass
+    try:
+        process.wait(5)
+    except subprocess.SubprocessError:
+        pass
 
 
 class GitleaksAdapter(DetectorAdapter):
@@ -58,6 +103,31 @@ class GitleaksAdapter(DetectorAdapter):
         except (OSError, subprocess.SubprocessError) as exc:
             raise AdapterUnavailable(f"gitleaks {binary!r} is not runnable") from exc
         self.version = completed.stdout.strip() or "unknown"
+        self.prespawn = settings.enabled("PG_GITLEAKS_PRESPAWN")
+        self._lock = threading.Lock()
+        self._idle: subprocess.Popen | None = None
+        self._refilling = False
+        self._closed = False
+        if self.prespawn:
+            _OPEN.add(self)
+            self._refill()
+
+    def runtime_settings(self) -> Mapping[str, Any]:
+        return {"prespawn": "on" if self.prespawn else "off"}
+
+    def close(self) -> None:
+        """Kill the waiting process; no new one is started after this."""
+        with self._lock:
+            self._closed = True
+            process, self._idle = self._idle, None
+        if process is not None:
+            _discard(process)
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def scan(self, text: str) -> list[RawFinding]:
         return self.scan_many([text])[0]
@@ -96,13 +166,78 @@ class GitleaksAdapter(DetectorAdapter):
         return results
 
     def _run(self, stream: str) -> list[dict[str, Any]]:
-        completed = subprocess.run(
-            self.command, input=stream.encode("utf-8"), capture_output=True,
-            timeout=self.timeout, cwd=self.cwd, env=self.env, check=False,
-        )
-        if completed.returncode != 0:
-            raise RuntimeError(f"gitleaks exited with {completed.returncode}")
-        return json.loads(completed.stdout or b"[]")
+        data = stream.encode("utf-8")
+        if not self.prespawn:
+            return self._finish(self._spawn(), data)
+        waiting = self._take()
+        try:
+            if waiting is not None:
+                try:
+                    return self._finish(waiting, data, waiting=True)
+                except _Stale:
+                    pass  # start one now and try once more, as without a waiting process
+            return self._finish(self._spawn(), data)
+        finally:
+            threading.Thread(target=self._refill, name="gitleaks-prespawn", daemon=True).start()
+
+    def _spawn(self) -> subprocess.Popen:
+        return subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                cwd=self.cwd, env=self.env)
+
+    def _take(self) -> subprocess.Popen | None:
+        """The waiting process, handed to one caller only; None when there is none or another call has it."""
+        with self._lock:
+            process, self._idle = self._idle, None
+        return process
+
+    def _refill(self) -> None:
+        with self._lock:
+            if self._closed or self._idle is not None or self._refilling:
+                return
+            self._refilling = True
+        process = None
+        keep = False
+        try:
+            process = self._spawn()
+        except Exception:
+            pass  # the next call starts its own
+        finally:
+            with self._lock:
+                self._refilling = False
+                keep = process is not None and not self._closed and self._idle is None
+                if keep:
+                    self._idle = process
+        if process is not None and not keep:
+            _discard(process)
+
+    def _finish(self, process: subprocess.Popen, data: bytes, *, waiting: bool = False) -> list[dict[str, Any]]:
+        """Write the stream, close stdin, read the report: what subprocess.run did, with the timeout from the write.
+
+        For a waiting process, having died or failing on the write raises _Stale so the caller retries once.
+        """
+        if waiting and process.poll() is not None:
+            _discard(process)
+            raise _Stale
+        with process:
+            try:
+                stdout, _ = process.communicate(data, timeout=self.timeout)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate()
+                raise
+            except OSError:
+                process.kill()
+                if waiting:
+                    raise _Stale
+                raise
+            except BaseException:
+                process.kill()
+                raise
+        if process.returncode != 0:
+            if waiting:
+                raise _Stale  # it died while waiting or on the write
+            raise RuntimeError(f"gitleaks exited with {process.returncode}")
+        return json.loads(stdout or b"[]")
 
     @staticmethod
     def _boundary(texts: Sequence[str]) -> str:
