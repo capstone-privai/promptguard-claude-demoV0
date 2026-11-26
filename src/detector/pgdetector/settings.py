@@ -22,6 +22,7 @@ DEFAULTS = {
     # Model adapters only (adapters/span_models.py): strong, keep or drop. detector.json's short_values comes between
     # the environment and this.
     "PG_ML_SHORT_VALUES": "strong",
+    "PG_GITLEAKS_PRESPAWN": "on",
 }
 
 

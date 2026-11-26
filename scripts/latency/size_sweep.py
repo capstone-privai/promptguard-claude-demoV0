@@ -336,7 +336,7 @@ def markdown(result: dict[str, Any]) -> str:
         adapters = ", ".join(f"{a['name']} {a['version']}" for a in d["adapters"])
         runtime = (d.get("runtime_settings") or {}).get("adapters") or {}
         lines += [f"- 엔진 설정: 정책 `{d['candidate_policy']}`, 합의 `{d['consensus']}`, 모듈 {adapters}",
-                  f"- 필터: {d.get('filter_settings')}" + (f", 모델: {json.dumps(runtime, ensure_ascii=False)}" if runtime else ""),
+                  f"- 필터: {d.get('filter_settings')}" + (f", 실행 설정: {json.dumps(runtime, ensure_ascii=False)}" if runtime else ""),
                   f"- 건너뛴 모듈: {', '.join(s['name'] for s in d.get('skipped') or []) or '없음'}", "",
                   "**탐지기 한 번 호출 (`detector.scan`)**", "",
                   "| 크기 (KB) | p50 | p90 | p95 | p99 | 최대 | 타임아웃 넘음 | 4KB 목표 (p90 300ms) |", "|---|---|---|---|---|---|---|---|"]
