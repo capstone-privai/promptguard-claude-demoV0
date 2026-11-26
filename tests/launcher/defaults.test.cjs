@@ -17,6 +17,7 @@ const DETECTOR = {
   PG_RULE_HEX_KEY: 'on',
   PG_SHELL_POSITIONAL_MIN: '4',
   PG_PLACEHOLDER_PUBLIC_PREFIX: 'off',
+  PG_ML_SHORT_VALUES: 'strong',
 }
 const MOD = {
   PG_REMASK: 'on',

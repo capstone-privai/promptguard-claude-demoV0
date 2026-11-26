@@ -78,3 +78,37 @@ test('the supervisor warns with names only and hands filter and model names to t
   assert.ok(!/digest-/.test(text), 'no digest in the warning')
   assert.ok(logs.every(([level]) => level === 'warn'))
 })
+
+// ---- PG_ML_SHORT_VALUES: what the model adapters do with a short span (strong, keep or drop). A Mod that keeps
+// short model spans and a Guard that drops them (or the other way round) mask and block different text.
+const short = values => ({ model_settings: { PG_ML_CHECKPOINT: 'aa', PG_VERIFIER_BUNDLE: null, PG_DETECTOR_CANDIDATE_POLICY: 'union', PG_ML_SHORT_VALUES: values } })
+
+test('model settings: the short-value mode is compared', () => {
+  for (const mode of ['strong', 'keep', 'drop']) assert.deepEqual(modelSettingsMismatch(short(mode), short(mode)), [])
+  assert.deepEqual(modelSettingsMismatch(short('strong'), short('drop')), ['PG_ML_SHORT_VALUES'])
+  assert.deepEqual(modelSettingsMismatch(short('strong'), short('keep')), ['PG_ML_SHORT_VALUES'])
+  assert.deepEqual(modelSettingsMismatch(short('strong'), { model_settings: { PG_ML_CHECKPOINT: 'aa' } }), ['PG_ML_SHORT_VALUES'], 'a worker that does not report it')
+  assert.deepEqual(modelSettingsMismatch(short(null), {}), ['PG_ML_CHECKPOINT'], 'no model on either side: nothing to compare')
+})
+
+test('the supervisor names the short-value setting for the Final Guard', () => {
+  const { RuntimeSupervisor } = require('../../src/supervisor/runtime.cjs')
+  const services = new Map([
+    ['transformDetector', { readyValue: { ...on, ...short('strong') } }],
+    ['verificationDetector', { readyValue: { ...on, ...short('drop') } }],
+    ['finalGuard', { env: {} }],
+  ])
+  const logs = []
+  const fake = { service: name => services.get(name), log: (level, message) => logs.push([level, message]) }
+  RuntimeSupervisor.prototype.checkFilterSettings.call(fake)
+  assert.equal(services.get('finalGuard').env.PG_DETECTOR_FILTER_MISMATCH, 'PG_ML_SHORT_VALUES')
+  assert.match(logs.map(([, message]) => message).join(' '), /PG_ML_SHORT_VALUES/)
+})
+
+test('the Final Guard knows every model setting the supervisor can name', () => {
+  const { MODEL_SETTINGS } = require('../../src/supervisor/filter-settings.cjs')
+  const { loadConfig } = require('../../src/guard/lib.cjs')
+  const env = { PG_UPSTREAM_BASE_URL: 'http://127.0.0.1:1', PG_GUARD_DETECTOR_URL: 'http://127.0.0.1:2' }
+  assert.deepEqual([...loadConfig({ ...env, PG_DETECTOR_FILTER_MISMATCH: MODEL_SETTINGS.join(',') }).modelMismatch], [...MODEL_SETTINGS])
+  assert.deepEqual([...loadConfig({ ...env, PG_DETECTOR_FILTER_MISMATCH: 'PG_ML_SHORT_VALUES' }).modelMismatch], ['PG_ML_SHORT_VALUES'])
+})

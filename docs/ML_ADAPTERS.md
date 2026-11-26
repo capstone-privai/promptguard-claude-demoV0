@@ -56,10 +56,21 @@ cd sample-protected-project
 | `timeout_seconds` | 둘 다 | 4 / 25 | 모델 작업이 넘기면 오류로 처리해 요청을 막는다. 앞선 호출이 끝나기를 기다리는 시간은 따로 같은 길이만큼 허용한다 |
 | `max_text_chars` | 둘 다 | 없음 / 12000 (Qwen) | 이보다 긴 텍스트는 이 모델이 보지 않고 다른 모듈에 맡긴다(cue 게이트와 같은 방식) |
 | `too_long` | 둘 다 | `fail` (코드 기본) / `skip` (detector.json) | 줄 하나가 입력 한도를 넘거나 청크가 `max_chunks`보다 많을 때: `fail`이면 오류로 요청을 막고, `skip`이면 그 텍스트를 다른 모듈에 맡긴다. 2026-10-30 시연 리허설에서 Claude Code의 긴 시스템 텍스트 때문에 Qwen이 실패해 요청이 막혀 `skip`으로 정했다 |
-| `min_value_length` | 둘 다 | 6 | 모델이 찍은 스팬이 이보다 짧거나 평범한 영어 단어(of, by, option 등)면 버린다. 2026-10-30 시연 중 ml-v9가 "of", "by"를 비밀로 찍은 오탐 때문에 넣었다. 6자 미만 비밀번호는 모델로는 가리지 않는다(다른 모듈은 여전히 검사) |
+| `short_values` | 둘 다 | `strong` | `min_value_length`보다 짧은 스팬(짧은 스팬)을 어떻게 할지 정한다. `strong`이면 점수가 `strong_threshold` 이상일 때만 남기고 strong으로 낸다(`password = "mgb"`처럼 짧은 비밀번호도 모델이 확신하면 남고, 길이 하한이 없어 1자도 남는다). `keep`이면 길이로 버리지 않고 점수로 strong·ambiguous를 나눈다(필터를 끈 측정을 재현하는 용도). `drop`이면 짧은 스팬을 모두 버린다(이전 동작). 평범한 영어 단어(of, by, option 등)는 세 값 모두에서 버리고, `min_value_length` 이상인 스팬은 세 값에서 같다. `PG_ML_SHORT_VALUES`가 이 값보다 우선한다 |
+| `min_value_length` | 둘 다 | 6 | 이보다 짧은 스팬이 "짧은 스팬"이다. 앞뒤 공백과 따옴표·구두점을 뗀 글자 수로 센다(`"ab",`는 2자). `keep`에서는 읽지 않는다. 2026-10-30 시연 중 ml-v9가 "of", "by"를 비밀로 찍은 오탐 때문에 넣었다(그 두 단어는 평범한 단어 목록에 있어 어느 값에서도 버린다) |
 | `max_chunks`, `overlap_lines` | Qwen | 8, 1 | 입력 한도(4,096 토큰)를 넘는 텍스트를 줄 단위로 나누는 방식 |
 | `long_text` | 둘 다 | `whole` (코드 기본) / `cue_windows` (v9, detector.json) | `cue_windows`면 `whole_text_chars`(2000)자 이하 텍스트는 통째로, 더 긴 텍스트는 cue 단어가 있는 줄과 앞뒤 `window_lines`(2)줄만 모델에 보낸다. 이때 `max_text_chars`는 모델이 읽는 창들의 합이고, 넘으면 `too_long`을 따른다. v9는 CPU에서 2KB에 약 0.4초, 20KB에 4~9초가 걸려 4초 timeout을 넘겼고, 큰 도구 출력은 매번 막혔다(2026-11-05 측정) |
 | `scope` | ml-span, ml-v9 | `cue` | `full`이면 `full_text_chars`(20000)자까지 통째로 읽고, 더 긴 글은 단서 주변 방식으로 읽는다. 모델 제한은 `full_timeout_seconds`(25)가 된다. `PG_ML_SCOPE`와 `--ml-scope`가 이 값보다 우선하고, `PG_ML_TIMEOUT_SECONDS`는 제한 시간에서 계속 우선한다 |
+
+### 짧은 스팬과 모델 저장소의 길이 필터
+
+- 길이 필터는 두 곳에 있다. 데모의 어댑터(`span_models.py`의 `_plausible`, 세 어댑터 공통)와 모델 저장소의 `MLSpanDetector`다.
+- 모델 저장소의 `MLSpanDetector`는 번들의 `span_bundle.json`에 `min_value_length`가 있으면 `scan_text` 안에서 그보다 짧은 스팬을 먼저 버린다. v10 번들은 6이고, v9 번들과 token-span으로 내보낸 번들(`span-creddata-mmbert-base` 등)에는 값이 없어 이 필터가 돌지 않는다. 그대로 두면 v10에서는 `strong`·`keep`이어도 1~5자 스팬이 어댑터까지 오지 않는다.
+- 그 클래스는 생성자의 `min_value_length`가 번들 값보다 우선하고, `None`이면 번들 값을 쓰며, 1 이상만 받는다. 그래서 `strong`과 `keep`에서는 모델을 만들 때 `min_value_length=1`을 넘겨 그 필터를 끈다. 모델 저장소 코드와 번들은 고치지 않는다.
+- `drop`에서는 아무것도 넘기지 않는다. 모델은 이전과 똑같이 만들어지고 번들 값이 그대로 적용된다.
+- 생성자에 그 인자가 없는 런타임(길이 필터가 들어가기 전 버전)에는 넘기지 않는다. 끌 필터가 없기 때문이다.
+- ml-qwen의 `QwenSecretScanner`에는 길이 필터가 없어 어댑터 쪽 판단만 적용된다.
+- Mod와 Guard의 worker가 다른 값으로 돌면 한쪽만 짧은 값을 가리거나 막는다. 탐지기는 `describe()["model_settings"]`에 `PG_ML_SHORT_VALUES`(ML 모듈이 없으면 `null`)를 알리고, supervisor가 다르면 이름을 경고로 내며 Guard의 차단 메시지에 "모델 설정 불일치"로 적는다.
 
 ## 동작 원칙
 

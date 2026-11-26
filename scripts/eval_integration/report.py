@@ -29,7 +29,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
-from configs import ALL_SETS, BASELINE, CONFIGS
+from configs import ALL_SETS, BASELINE, CONFIGS, ML_CONFIGS, NEEDS_VERIFIER
 
 REMASK_PAIR = ("7-all", "8-defaults-no-remask")  # covered by the first and not the second: covered by the re-mask only
 
@@ -326,6 +326,9 @@ def build(out: Path, main_root: Path, branch_root: Path) -> Path:
              "| 설정 | recall | 글자 precision | F2 | 못 가린 span / 고유 값 | 재마스킹 오탐 |" + "".join(f" {t} 1,000줄당 오탐 |" for t in traffic)
              + " 걸러낸 수 (거르기별) | 새로 놓친 정답 | 재마스킹으로만 가린 정답 (span / 고유 값) |",
              "|" + "---|" * (9 + len(traffic))]
+    if any(config in ML_CONFIGS for config in manifest["configs"]):
+        lines.insert(5, "- 10~15번은 새 기본값에 ml-span을 켠 칸이다(`PG_ML_SHORT_VALUES`가 drop / strong / keep, 정책 union / verifier). "
+                        "새로 놓친 정답은 strong·keep 칸을 같은 정책의 drop 칸과, 13번을 10번과, 10번을 7번과 비교한다.")
     missed_rows, rule_rows, warnings = [], [], []
     for config in manifest["configs"]:
         n = runs.get((config, cred))
@@ -370,9 +373,12 @@ def build(out: Path, main_root: Path, branch_root: Path) -> Path:
                   "후보이고, 같은 자리를 여러 규칙이 냈으면 함께 적는다. 값은 적지 않는다.", ""]
         lines += (["| 처음 잡은 탐지기:규칙 | 재마스킹 오탐 span | 고유 값 |", "|---|---|---|",
                    *[f"| {catcher} | {count} | {values[catcher]} |" for catcher, count in spans.most_common()]] if spans else ["없음."])
-    verifier_rows = [(name, verifier_stats(runs[("9-defaults-verifier", name)])) for name in [cred, *manifest["nine"]] if ("9-defaults-verifier", name) in runs]
-    if verifier_rows:
-        lines += ["", "## 9번(새 기본값 + --policy verifier) 검증기", "",
+    for config in NEEDS_VERIFIER:
+        verifier_rows = [(name, verifier_stats(runs[(config, name)])) for name in [cred, *manifest["nine"]] if (config, name) in runs]
+        if not verifier_rows:
+            continue
+        title = "9번(새 기본값 + --policy verifier)" if config == "9-defaults-verifier" else f"{config} ({CONFIGS[config][2]})"
+        lines += ["", f"## {title} 검증기", "",
                   "애매함(ambiguous) 후보만 검증기에 간다. 구조 거르기에서 걸러진 후보는 가지 않는다. 새로 놓친 정답은 검증기가 가리지 않은 후보 중 "
                   "이 실행에서 덮이지 않은 정답과 겹친 수다. timeout·fail-closed는 검증기 호출이 실패해 그 항목의 애매함 후보를 모두 가린 항목 수다.", "",
                   "| 데이터셋 | 검사한 항목 | 가린 애매함 후보 | 안 가린 애매함 후보 | 안 가린 것 중 정답 (새로 놓친 정답) | timeout | fail-closed (timeout 포함) |",

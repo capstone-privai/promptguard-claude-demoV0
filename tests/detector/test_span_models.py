@@ -125,7 +125,10 @@ class SpanModelTests(unittest.TestCase):
             adapter.scan(f"key {SECRET}")
 
     def test_short_and_plain_word_spans_are_dropped(self) -> None:
-        # ml-v9 flagged "of" and "by" in a live demo session.
+        # ml-v9 flagged "of" and "by" in a live demo session. Dropping every span under min_value_length is the "drop"
+        # mode (PG_ML_SHORT_VALUES, tests/detector/test_ml_short_values.py); under the default "strong", "today"
+        # (five characters, a score at strong_threshold) stays.
+        self.options = {**self.options, "short_values": "drop"}
         text = f"the token of the account is set by {SECRET} today"
         rows = self.v9(spans=[("of", 0.9999), ("by", 0.9999), ("today", 0.99), (SECRET, 0.9999)]).scan(text)
         self.assertEqual([text[r.start:r.end] for r in rows], [SECRET])

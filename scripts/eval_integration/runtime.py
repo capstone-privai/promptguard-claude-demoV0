@@ -11,7 +11,7 @@ from typing import Any, Mapping, Sequence
 
 # Overrides a run records, and those whose value is a path (only its last folder name is kept).
 RECORDED = ("PG_ML_DEVICE", "PG_VERIFIER_DEVICE", "PG_ML_TIMEOUT_SECONDS", "PG_ML_CHECKPOINT", "PG_VERIFIER_BUNDLE",
-            "PG_ML_SCOPE", "PG_DETECTOR_ENABLE", "PG_DETECTOR_DISABLE", "PG_DETECTOR_TIMEOUT_MS")
+            "PG_ML_SCOPE", "PG_DETECTOR_ENABLE", "PG_DETECTOR_DISABLE", "PG_DETECTOR_TIMEOUT_MS", "PG_ML_SHORT_VALUES")
 PATHS = ("PG_ML_CHECKPOINT", "PG_VERIFIER_BUNDLE")
 LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
 UNFILLED = re.compile(r"<[^<>]+>")

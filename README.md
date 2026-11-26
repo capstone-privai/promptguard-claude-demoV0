@@ -175,6 +175,7 @@ Mod와 Guard의 탐지기 worker는 같은 `pgdetector`(`src/detector/pgdetector
 | `PG_SECRET_FILE_PRELOAD` | `off` | `off` | `on`이면 위 경로를 이름에 담은 Bash 명령을 실행하기 전과 Read가 그런 경로를 열 때, 256바이트 이하 한 줄 파일의 앞뒤 공백을 뺀 내용(`secrets/` 안·정확한 이름 등은 3자 이상, 이름으로만 고른 파일은 8자 이상)을 금고에 미리 넣어 이후 어디에 나오든 재마스킹으로 가립니다 | 측정 전이라 끔 | #30 |
 | `PG_GUARD_COUNT_TOKENS` | `block` | `block` | `mask`이면 Final Guard가 count_tokens 요청에 한해 422 대신 탐지한 값을 자리표시자로 바꿔 보냅니다. `/v1/messages`는 그대로 막습니다 | 빈틈 확인 측정 전이라 그대로 | #25 |
 | `PG_PLACEHOLDER_PUBLIC_PREFIX` | `off` | `off` | `on`이면 공개 접두어를 남겨 가립니다(`sk_live_[STRIPE_SECRET_KEY_1]`) | 측정 안 함이라 그대로 | #21 |
+| `PG_ML_SHORT_VALUES` | `strong` | `drop` | ML 어댑터(ml-span, ml-v9, ml-qwen)가 찍은 6자 미만 span(앞뒤 따옴표·구두점은 빼고 셉니다)을 어떻게 할지 정합니다. `strong`은 점수가 그 어댑터의 `strong_threshold`(0.99) 이상일 때만 남기고 strong으로 냅니다. 길이 하한이 없어 1자도 남습니다. `keep`은 길이로 버리지 않고 점수로 strong·ambiguous를 나눕니다(필터를 끈 측정을 재현하는 용도). `drop`은 6자 미만을 모두 버리던 이전 동작입니다. 평범한 영어 단어(of, by 등)는 세 값 모두에서 버리고, 6자 이상 값은 세 값에서 같습니다. ML은 기본으로 꺼져 있어, 켜지 않으면 달라지는 것이 없습니다. `detector.json`의 `short_values`로도 줍니다(환경변수가 우선). Mod와 Guard의 값이 다르면 모델 설정 불일치로 알려 줍니다 | 정우 11-26 측정(룰 + token-span mmbert-base, 검증기 없음, v3): 놓친 99 span 중 52개가 이 필터 때문. 버려지던 68 span 중 0.99 이상은 정답 48 / 오탐 1, 미만은 정답 4 / 오탐 15(근사 점수로 계산한 예상). 모델 하나와 데이터 하나의 결과이고 실제 트래픽 오탐은 재지 않음 | #35 |
 
 기본값이 들어 있는 곳은 `src/detector/pgdetector/settings.py`(탐지기), `src/native-mod/hooks/register.mjs`의 `DEFAULTS`(Mod), `src/guard/lib.cjs`(Guard) 세 곳이고, `tests/launcher/defaults.test.cjs`가 이 표와 함께 맞춰 봅니다.
 
@@ -343,6 +344,32 @@ class MyAdapter(DetectorAdapter):
 | 9 | 새 기본값 + `--policy verifier`(#28, `PG_DETECTOR_CANDIDATE_POLICY=verifier`). 애매함 후보만 뒷단 검증기가 다시 판정합니다. 번들은 `--verifier-bundle DIR` 또는 `PG_VERIFIER_BUNDLE` |
 
 2~7번은 `PG_REMASK=on`입니다(지금까지 늘 켜져 있던 동작).
+
+**ML 짧은 값 칸 (10~15번).** 새 기본값에 ml-span을 켜고(`PG_DETECTOR_ENABLE=ml-span`) `PG_ML_SHORT_VALUES`와 정책만 바꾼 여섯 칸입니다. `--configs`로 이름을 줄 때만 돌고, 이름을 주지 않은 실행은 지금처럼 1~9번입니다.
+
+| 번호 (`--configs` 이름) | `PG_ML_SHORT_VALUES` | 정책 | 새로 놓친 정답의 기준 |
+|---|---|---|---|
+| 10 (`10-ml-drop`) | `drop` | union | 7번 |
+| 11 (`11-ml-strong`) | `strong` | union | 10번 |
+| 12 (`12-ml-keep`) | `keep` | union | 10번 |
+| 13 (`13-ml-drop-verifier`) | `drop` | verifier | 10번 |
+| 14 (`14-ml-strong-verifier`) | `strong` | verifier | 13번 |
+| 15 (`15-ml-keep-verifier`) | `keep` | verifier | 13번 |
+
+- ml-span 가중치와 torch가 있어야 하고, 13~15번은 검증기 번들(`--verifier-bundle` 또는 `PG_VERIFIER_BUNDLE`)도 있어야 합니다. 없으면 그 칸의 실행이 실패로 남습니다.
+- ml-span이 읽는 번들은 셸이나 `--env-file`의 `PG_ML_CHECKPOINT`로 고릅니다(주지 않으면 모델 저장소의 기본 번들). token-span으로 학습해 내보낸 번들(예: `models/span-creddata-mmbert-base`)도 같은 방식으로 읽습니다.
+- CredData-trajectory와 실제 트래픽 셋에서만 돕니다(기존 9셋 전체는 1·7·8·9번만). CPU에서는 ML이 느리므로 GPU 서버에서 `--env-file`과 함께 돌리기를 권합니다.
+- `PG_ML_SHORT_VALUES`는 실행마다 지웠다가 그 칸의 값으로 다시 주므로, 셸에 남은 값이 다른 칸을 바꾸지 않습니다. 1~9번에 `--env-file`로 ML을 켜면 새 기본값(`strong`)으로 돕니다.
+- 실행이 실제로 받은 값은 보고서 "실행 설정" 표의 "덮어쓴 환경변수" 칸에 적힙니다.
+
+```bash
+python $PG/scripts/eval_integration/run.py --data-root . \
+  --creddata metric-detection/data_test/sessions_from_CredData-trajectory.jsonl \
+  --nine metric-detection/data_test/sessions_from_openhands-feedback.jsonl metric-detection/data_test/sessions_from_SWE-Gym.jsonl \
+  --out runs/eval-ml-short --gitleaks ../tools/gitleaks-8.30.1 \
+  --configs 10-ml-drop 11-ml-strong 12-ml-keep 13-ml-drop-verifier 14-ml-strong-verifier 15-ml-keep-verifier \
+  --verifier-bundle ../promptguard-model/runs/verifier/creddata-mmbert-small/model
+```
 
 ```bash
 cd promptguard-data   # creddata-trajectory-data 브랜치

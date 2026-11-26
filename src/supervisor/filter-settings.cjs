@@ -14,10 +14,11 @@ function filterSettingsMismatch(transformReady, verificationReady) {
 }
 
 // The model settings (pgdetector describe(): model_settings): the ml-span checkpoint and the verifier bundle as
-// digests of their resolved paths (null when not loaded), and the candidate policy. A worker that does not report
+// digests of their resolved paths (null when not loaded), the candidate policy, and what the model adapters do with a
+// short span (PG_ML_SHORT_VALUES: strong, keep or drop; null with no model adapter). A worker that does not report
 // them counts as no model and the default policy.
-const MODEL_SETTINGS = Object.freeze(['PG_ML_CHECKPOINT', 'PG_VERIFIER_BUNDLE', 'PG_DETECTOR_CANDIDATE_POLICY'])
-const MODEL_DEFAULTS = Object.freeze({ PG_ML_CHECKPOINT: null, PG_VERIFIER_BUNDLE: null, PG_DETECTOR_CANDIDATE_POLICY: 'union' })
+const MODEL_SETTINGS = Object.freeze(['PG_ML_CHECKPOINT', 'PG_VERIFIER_BUNDLE', 'PG_DETECTOR_CANDIDATE_POLICY', 'PG_ML_SHORT_VALUES'])
+const MODEL_DEFAULTS = Object.freeze({ PG_ML_CHECKPOINT: null, PG_VERIFIER_BUNDLE: null, PG_DETECTOR_CANDIDATE_POLICY: 'union', PG_ML_SHORT_VALUES: null })
 
 function modelSetting(ready, name) {
   const value = ready && ready.model_settings ? ready.model_settings[name] : undefined
