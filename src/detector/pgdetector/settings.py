@@ -19,6 +19,9 @@ DEFAULTS = {
     "PG_RULE_HEX_KEY": "on",
     "PG_SHELL_POSITIONAL_MIN": "4",
     "PG_PLACEHOLDER_PUBLIC_PREFIX": "off",
+    # Model adapters only (adapters/span_models.py): strong, keep or drop. detector.json's short_values comes between
+    # the environment and this.
+    "PG_ML_SHORT_VALUES": "strong",
 }
 
 

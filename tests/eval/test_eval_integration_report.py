@@ -53,9 +53,10 @@ class Configs(unittest.TestCase):
         self.assertEqual(env, {**NEW_DEFAULTS, REMASK: "on", POLICY: "verifier"})
         self.assertEqual(BASELINE["9-defaults-verifier"], "7-all")
         self.assertIn("9-defaults-verifier", ALL_SETS)
-        self.assertEqual(NEEDS_VERIFIER, ("9-defaults-verifier",))
+        self.assertIn("9-defaults-verifier", NEEDS_VERIFIER)
         for name, (_, env, _) in CONFIGS.items():
-            if name not in ("1-main", "9-defaults-verifier"):
+            # The ML cells 13-15 are verifier configurations too (tests/eval/test_eval_ml_short_configs.py).
+            if name != "1-main" and name not in NEEDS_VERIFIER:
                 self.assertEqual(env[POLICY], "union", f"{name}: the default policy, set explicitly")
 
 

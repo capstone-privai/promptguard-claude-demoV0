@@ -109,11 +109,13 @@ class Detector:
             **(self.filters.describe() if self.filters else {}),
             "filter_settings": filter_settings(),
             # What the supervisor compares between the Mod's and the Guard's workers, besides filter_settings: the
-            # ml-span checkpoint and the verifier bundle as digests of their resolved paths, and the candidate policy.
+            # ml-span checkpoint and the verifier bundle as digests of their resolved paths, the candidate policy, and
+            # what the model adapters do with a short span (None with no model adapter).
             "model_settings": {
                 "PG_ML_CHECKPOINT": next((adapter.checkpoint_digest for adapter in self.adapters if getattr(adapter, "family", None) == "ml_span"), None),
                 "PG_VERIFIER_BUNDLE": self.verifier.bundle_digest if self.verifier is not None else None,
                 "PG_DETECTOR_CANDIDATE_POLICY": self.candidate_policy,
+                "PG_ML_SHORT_VALUES": _short_values(self.adapters),
             },
             # Device, timeout and bundle name each model adapter and the verifier actually run with (no path).
             "runtime_settings": {
@@ -313,6 +315,19 @@ def _decorate_candidates(candidates: list[dict[str, Any]], protected: list[dict[
         candidate["legacy_protected"] = legacy
         candidate["strength"] = "strong" if legacy or listed or any(row.get("strength") == "strong" for row in evidence) else "ambiguous"
         candidate.pop("value_hash", None)
+
+
+def _short_values(adapters: Sequence[DetectorAdapter]) -> str | None:
+    """PG_ML_SHORT_VALUES as the model adapters run it, for model_settings.
+
+    None with no model adapter, where the setting changes nothing. Model adapters that differ (detector.json options)
+    are spelled out by name, so two workers still compare equal only when every adapter does.
+    """
+    rows = [(adapter.name, adapter.short_values) for adapter in adapters if hasattr(adapter, "short_values")]
+    modes = {mode for _, mode in rows}
+    if len(modes) <= 1:
+        return next(iter(modes), None)
+    return ",".join(f"{name}={mode}" for name, mode in rows)
 
 
 def _name_set(value: str | None) -> set[str]:

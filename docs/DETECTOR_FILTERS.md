@@ -24,6 +24,20 @@
 | | `code_fragment` | 모든 탐지기: `(`나 `[`로 끝나는 식별자, 또는 닫혔는데 안에 코드만 있는 호출·인덱스(아래) | `function(`, `attributes[`, `get_token()`, `options['password']`, `os.environ["DB_PASS"]`, `config.get("db.password")` |
 | `PG_DETECTOR_FILTER_DUMMY=on` (따로) | `dummy_value` | 모든 탐지기: 자리표시 모양만 (정확히 일치하는 목록과 명시적 패턴) | `<password>`, `replace_me`, `your_api_key_here`, `<your-token>`, `xxxxxxxx`, `********`, `REDACTED` |
 
+**ML 어댑터의 짧은 스팬 (`ml_short_*`)**
+
+위 구조 거르기와 별개로, ML 어댑터(ml-span, ml-v9, ml-qwen)는 자기가 찍은 짧은 스팬(`min_value_length` 6자 미만) 중 값 전체가 아래 모양인 것을 스스로 버리고 같은 집계에 이름별 개수만 더한다. `PG_ML_SHORT_VALUES`가 `strong`·`keep`일 때만이고, `drop`과 6자 이상 스팬에는 적용하지 않는다. 구조 거르기(`STRUCTURE`)는 그대로다. 자세한 내용은 [ML adapter 문서](ML_ADAPTERS.md)에 있다.
+
+| 이름 | 버리는 값 (전체가 일치할 때만) | 예 | 통과하는 예 |
+|---|---|---|---|
+| `ml_short_literal` | `null`, `none`, `nil`, `undefined`, `true`, `false` (대소문자 무시). 바로 앞뒤가 따옴표면 문자열 값이라 남긴다 | `null`, `None`, `true` | `"true"`, `nulls` |
+| `ml_short_shell_variable` | `$NAME`, `$1`, `%NAME%` | `$PW`, `$1`, `%PW%` | `p$w`, `$` |
+| `ml_short_mask` | `*`, `x`, `X`, `#`, `-` 중 한 글자가 3번 이상 반복 | `***`, `xxxx`, `###` | `x9x`, `xXx`, `**` |
+| `ml_short_format` | `%s`, `%d` | `%s` | `%sd` |
+| `ml_short_placeholder` | 꺾쇠 안에 영문자·숫자·`_`·`-`만 | `<pw>`, `<a-b>` | `<>` |
+
+집계는 다른 이름들처럼 구조 거르기나 더미 거르기가 켜져 있을 때 결과의 `filtered`에 나온다. 둘 다 끄면 버리기는 하되 개수는 나오지 않는다.
+
 **어떤 값을 거르고 어떤 값을 남기나**
 
 - **코드 조각:** 닫힌 괄호·대괄호 안에는 비어 있음, 식별자·속성 참조, 따옴표로 감싼 키 이름, 이들의 쉼표 목록만 올 수 있다. 그 밖의 문자가 있으면 통과한다. 예를 들어 `Xk9(mZ!q#2)`, `S3cr3t(!)`는 통과한다.

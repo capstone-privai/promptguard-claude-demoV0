@@ -174,4 +174,5 @@ class ModelSettingsDigest(unittest.TestCase):
     def test_rule_only_detector(self) -> None:
         from pgdetector.adapters.patterns import PatternAdapter
         detector = Detector([PatternAdapter("promptguard-rules", {}, ROOT)], ConsensusPolicy.parse("any"), candidate_policy="union")
-        self.assertEqual(detector.describe()["model_settings"], {"PG_ML_CHECKPOINT": None, "PG_VERIFIER_BUNDLE": None, "PG_DETECTOR_CANDIDATE_POLICY": "union"})
+        self.assertEqual(detector.describe()["model_settings"], {"PG_ML_CHECKPOINT": None, "PG_VERIFIER_BUNDLE": None, "PG_DETECTOR_CANDIDATE_POLICY": "union",
+                                                               "PG_ML_SHORT_VALUES": None})

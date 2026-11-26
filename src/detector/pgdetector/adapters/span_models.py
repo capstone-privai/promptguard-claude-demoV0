@@ -26,21 +26,41 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import inspect
 import json
 import os
 import re
 import sys
 import threading
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
+from .. import settings
 from ..adapter import AdapterUnavailable, DetectorAdapter, RawFinding
+from ..filters import _NO_VALUE  # none, null, undefined: what a lookup default already counts as "no value"
 from .shell_aware import PROSE_WORDS
 
 DEFAULT_REPOSITORY = "../../../promptguard-model"
 DEFAULT_SPAN_BUNDLE = "models/span-detector-v10"
 DEFAULT_QWEN_BUNDLE = "models/qwen-span-v3"
+SHORT_VALUE_MODES = ("strong", "keep", "drop")
+# Counted around a model span for its length, and what makes a literal a string value when it stands on both sides.
+STRIP = "\"'`.,;:()[]{}"
+QUOTES = "\"'`"
+# A short model span that is one of these, whole, is not a value by its structure, whatever the model's score: without
+# the length floor a model that is sure of "null" or "$PW" would mask it. The ensemble's structure filters
+# (filters.py STRUCTURE) do not look at these shapes and are not changed, since every adapter's findings pass through
+# them. The first name of each row is the count reported (declined), never the value. A value that only resembles one
+# (p$w, x9x, nulls) passes.
+SHORT_LITERALS = frozenset(_NO_VALUE | {"nil", "true", "false"})
+SHORT_NON_VALUES = (
+    ("ml_short_shell_variable", re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9]+|%[A-Za-z_][A-Za-z0-9_]*%")),
+    ("ml_short_mask", re.compile(r"([*xX#-])\1{2,}")),
+    ("ml_short_format", re.compile(r"%[sd]")),
+    ("ml_short_placeholder", re.compile(r"<[A-Za-z0-9_-]+>")),
+)
 # Words that suggest a credential is nearby. Used only when an adapter sets
 # "gate": "cue" to skip slow models on text with no such word.
 # Whole words only (snake_case and camelCase parts count): "passed" or "bypass"
@@ -51,6 +71,26 @@ CUE = re.compile(
     r"|(?<=[a-z])(?:Password|Passwd|Secret|Token|ApiKey|Auth)"
     r"|비밀번호|비번|토큰|인증|시크릿"
 )
+
+
+def _setting(name: str, options: Mapping[str, Any], key: str) -> str:
+    """The environment variable, else the detector.json option, else the default (settings.DEFAULTS)."""
+    raw = os.environ.get(name)
+    if raw is not None and raw.strip():
+        return raw.strip()
+    value = options.get(key)
+    return settings.DEFAULTS[name] if value is None else str(value).strip()
+
+
+def _short_non_value(word: str, before: str, after: str) -> str | None:
+    """The count name when a short span's value is, whole, something that is not a value by its structure, else None.
+
+    ``before`` and ``after`` are the characters on either side of it ("" at the ends of the text). A literal with a
+    quote on both sides is a string ("true", 'null') and may be the value itself, so it passes.
+    """
+    if word.lower() in SHORT_LITERALS:
+        return None if before and after and before in QUOTES and after in QUOTES else "ml_short_literal"
+    return next((name for name, pattern in SHORT_NON_VALUES if pattern.fullmatch(word)), None)
 
 
 def _resolve(base: Path, value: str | None, default: str) -> Path:
@@ -129,9 +169,22 @@ class _ModelRepoAdapter(DetectorAdapter):
         self.whole_text_chars = int(options.get("whole_text_chars", 2000))
         self.window_lines = max(0, int(options.get("window_lines", 2)))
         self.strong_threshold = float(options.get("strong_threshold", 0.99))
-        # A model span shorter than this, or one that is an ordinary English word ("of", "by": ml-v9 flagged both
-        # in a live demo session), is not a credential value and is dropped before it can mask anything.
+        # A model span is short when it has fewer characters than this (quotes and punctuation around it not counted).
+        # An ordinary English word ("of", "by": ml-v9 flagged both in a live demo session) is never a credential value
+        # and is dropped whatever its length or score.
         self.min_value_length = max(1, int(options.get("min_value_length", 6)))
+        # short_values (PG_ML_SHORT_VALUES) says what happens to a short span. "strong" (default): it stays only when
+        # its score reaches strong_threshold, and is then strong like any other span with that score, so a three- or
+        # one-character password the model is sure of is masked and a short guess is not. "keep": never dropped for
+        # its length; the score decides strong or ambiguous (the filter switched off, for measurement). "drop": every
+        # short span is dropped, the behaviour before this setting, for going back and for comparison. A span of
+        # min_value_length or more is the same in all three. Under "strong" and "keep" a short span that is a literal,
+        # a shell variable, a mask, a format specifier or an angle placeholder (SHORT_NON_VALUES) is dropped and
+        # counted by name for the ensemble (declined), per text of this thread's batch.
+        self.short_values = _setting("PG_ML_SHORT_VALUES", options, "short_values")
+        if self.short_values not in SHORT_VALUE_MODES:
+            raise ValueError("short_values must be 'strong', 'keep' or 'drop'")
+        self._batch = threading.local()
         # One model instance is not safe to share across the worker's request
         # threads; a single executor thread serializes calls and lets a timeout
         # return control while the model call finishes in the background.
@@ -169,6 +222,17 @@ class _ModelRepoAdapter(DetectorAdapter):
         except FutureTimeout:
             raise RuntimeError(f"{self.name} timed out") from None
 
+    def scan_many(self, texts: Sequence[str]) -> list[list[RawFinding]]:
+        self._batch.declined = []
+        out = []
+        for text in texts:
+            self._batch.declined.append(Counter())
+            out.append(self.scan(text))
+        return out
+
+    def declined(self) -> list[Mapping[str, int]] | None:
+        return [dict(counts) for counts in getattr(self._batch, "declined", [])] or None
+
     def scan(self, text: str) -> list[RawFinding]:
         if not text.strip():
             return []
@@ -187,11 +251,16 @@ class _ModelRepoAdapter(DetectorAdapter):
         for start, end, score in spans:
             if not (0 <= start < end <= len(text)):
                 raise RuntimeError(f"{self.name} returned an invalid span")
-            if not self._plausible(text[start:end]):
+            strong = score >= self.strong_threshold
+            kept, reason = self._judge(text, start, end, strong)
+            if not kept:
+                declined = getattr(self._batch, "declined", None)
+                if reason and declined:
+                    declined[-1][reason] += 1
                 continue
             findings.append(RawFinding(
                 start, end, "SECRET", f"{self.family}-span",
-                "strong" if score >= self.strong_threshold else "ambiguous",
+                "strong" if strong else "ambiguous",
                 self.family, {"model": self.model_id}, round(float(score), 6),
             ))
         return findings
@@ -225,9 +294,41 @@ class _ModelRepoAdapter(DetectorAdapter):
             out.extend((base + start, base + end, score) for start, end, score in self._spans(piece))
         return out
 
-    def _plausible(self, value: str) -> bool:
-        word = value.strip().strip("\"'`.,;:()[]{}")
-        return len(word) >= self.min_value_length and word.lower() not in PROSE_WORDS
+    def _judge(self, text: str, start: int, end: int, strong: bool) -> tuple[bool, str | None]:
+        """(whether the model span text[start:end] is reported, the count name when a short span is dropped for its
+        structure). ``strong`` is whether its score reached strong_threshold."""
+        raw = text[start:end]
+        inner = raw.strip()
+        word = inner.strip(STRIP)
+        if not word or word.lower() in PROSE_WORDS:
+            return False, None
+        if len(word) >= self.min_value_length:
+            return True, None
+        if self.short_values == "drop" or (self.short_values == "strong" and not strong):
+            return False, None
+        # Where the word stands in the text, to see what is on either side of it.
+        first = start + (len(raw) - len(raw.lstrip())) + (len(inner) - len(inner.lstrip(STRIP)))
+        last = first + len(word)
+        reason = _short_non_value(word, text[max(0, first - 1):first], text[last:last + 1])
+        return reason is None, reason
+
+    def _model_length_guard(self, factory: Callable[..., Any]) -> dict[str, int]:
+        """What to build the model with so that its own length guard does not drop a short span first.
+
+        promptguard-model's MLSpanDetector drops spans shorter than its bundle's min_value_length (6 in v10; v9 and
+        the token-span bundles name none) inside scan_text, before this adapter sees them. Its constructor's
+        min_value_length wins over the bundle's, None means the bundle's, and it must be 1 or more: 1 is the guard
+        switched off. Passed under "strong" and "keep", and only to a runtime that names the argument (one from before
+        that guard has nothing to switch off); "drop" builds the model exactly as before. QwenSecretScanner has no
+        length guard. The model repository is not changed.
+        """
+        if self.short_values == "drop":
+            return {}
+        try:
+            named = "min_value_length" in inspect.signature(factory).parameters
+        except (TypeError, ValueError):
+            named = False
+        return {"min_value_length": 1} if named else {}
 
     def _spans(self, text: str) -> list[tuple[int, int, float]]:  # pragma: no cover - abstract
         raise NotImplementedError
@@ -269,7 +370,7 @@ class MLV9Adapter(_ModelRepoAdapter):
         # resolved folder, never the path itself.
         self.checkpoint_digest = path_digest(checkpoint)
         try:
-            self.model = factory(checkpoint, device=self.device)
+            self.model = factory(checkpoint, device=self.device, **self._model_length_guard(factory))
         except Exception as exc:
             raise AdapterUnavailable(f"{checkpoint.name} model initialization failed") from exc
         self.model_id = _bundle_id(checkpoint / "span_bundle.json", checkpoint.name)

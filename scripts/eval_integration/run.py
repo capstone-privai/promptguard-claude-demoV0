@@ -17,6 +17,11 @@ character precision, F2, per_finding.jsonl). promptguard-data is only read.
 - Configuration 1 runs main 668c2c1 from a detached worktree (--main-root, made under --out when not given).
 - Configuration 9 (new defaults + --policy verifier) needs the verifier bundle: --verifier-bundle DIR or
   PG_VERIFIER_BUNDLE, and the model repository detector.json names (promptguard-model).
+- The ML cells (PG_ML_SHORT_VALUES) run only when named, on CredData-trajectory and the traffic sets:
+      --configs 10-ml-drop 11-ml-strong 12-ml-keep 13-ml-drop-verifier 14-ml-strong-verifier 15-ml-keep-verifier
+  They turn ml-span on (PG_DETECTOR_ENABLE=ml-span), so they need its weights and torch; 13-15 need the verifier
+  bundle too. The bundle is the shell's or --env-file's PG_ML_CHECKPOINT (the model repository's default without it).
+  ML on a CPU is slow: give --env-file (device, timeout) on a GPU server.
 Finished runs are kept and skipped on the next call (--force runs them again). Relative paths are taken from
 --data-root. No value is printed or written outside the scorer's own run folders.
 """
@@ -33,7 +38,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from configs import ALL_SETS, CONFIGS, MAIN_COMMIT, NEEDS_VERIFIER  # noqa: E402
+from configs import ALL_SETS, CONFIGS, DEFAULT_CONFIGS, MAIN_COMMIT, NEEDS_VERIFIER  # noqa: E402
 
 BRANCH_ROOT = HERE.parents[1]
 TRAFFIC_NAMES = ("openhands-feedback", "SWE-Gym")
@@ -64,7 +69,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--traffic", nargs="*", default=None, help=f"names among --nine run in every configuration (default: {', '.join(TRAFFIC_NAMES)})")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--main-root", type=Path, help=f"checkout of main {MAIN_COMMIT} (default: a worktree under --out)")
-    parser.add_argument("--configs", nargs="*", choices=tuple(CONFIGS), default=list(CONFIGS))
+    parser.add_argument("--configs", nargs="*", choices=tuple(CONFIGS), default=list(DEFAULT_CONFIGS),
+                        help="default: the nine. The ML cells (10-ml-drop ... 15-ml-keep-verifier) run only when named")
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--gitleaks", type=Path, help="folder holding the gitleaks binary, put first on PATH")
     parser.add_argument("--verifier-bundle", type=Path, help="verifier bundle for configuration 9 (or PG_VERIFIER_BUNDLE)")
@@ -104,8 +110,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.verifier_bundle:
             env["PG_VERIFIER_BUNDLE"] = str(args.verifier_bundle.resolve())
         if any(c in NEEDS_VERIFIER for c in args.configs) and not env.get("PG_VERIFIER_BUNDLE"):
-            print("configuration 9 needs the verifier bundle: --verifier-bundle DIR or PG_VERIFIER_BUNDLE "
-                  "(or leave it out with --configs)", file=sys.stderr)
+            print(f"{', '.join(c for c in args.configs if c in NEEDS_VERIFIER)} need(s) the verifier bundle: --verifier-bundle DIR or "
+                  "PG_VERIFIER_BUNDLE (or leave them out with --configs)", file=sys.stderr)
             return 2
         if args.gitleaks:
             env["PATH"] = f"{args.gitleaks.resolve()}{os.pathsep}{env.get('PATH', '')}"

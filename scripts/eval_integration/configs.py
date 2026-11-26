@@ -5,7 +5,12 @@ of 2; 7 turns everything on; 8 is the new defaults (release/defaults-1120) with 
 spans only the re-mask covered. Every setting is set explicitly (or removed, for 1) so neither the shell nor a default
 can change a run. 9 is the new defaults with candidate_policy "verifier" (#28, promptguard run --policy verifier): the
 back-end verifier re-judges the ambiguous candidates; its bundle comes from PG_VERIFIER_BUNDLE. Every other configuration
-sets the policy to union, the default.
+of the nine sets the policy to union, the default.
+
+10-15 are the ml-span cells (PG_ML_SHORT_VALUES): the new defaults with ml-span on, times {drop, strong, keep} times
+{union, verifier}. They need the ml-span weights, so a run without --configs is still the nine (DEFAULT_CONFIGS), and
+they are named to be run: --configs 10-ml-drop 11-ml-strong ... Which bundle ml-span runs is left to the shell or
+--env-file (PG_ML_CHECKPOINT; the model repository's default without it).
 """
 
 from __future__ import annotations
@@ -39,7 +44,11 @@ NEW_DEFAULTS = {
 REMASK = "PG_REMASK"
 # #28's policy switch (PG_DETECTOR_CANDIDATE_POLICY, what --policy sets). union is the default and stays it.
 POLICY = "PG_DETECTOR_CANDIDATE_POLICY"
-ALL_SETTINGS = (*SETTINGS, REMASK, POLICY)
+# What the model adapters do with a short span (pgdetector settings.py): strong, keep or drop.
+ML_SHORT = "PG_ML_SHORT_VALUES"
+# Removed from the shell before a configuration's own are applied (scorer_child). PG_DETECTOR_ENABLE is not one of
+# them: an --env-file may turn a model on for the nine (on-prem scoring), and the ML cells set it themselves.
+ALL_SETTINGS = (*SETTINGS, REMASK, POLICY, ML_SHORT)
 
 
 def _env(*on: str, remask: str = "on") -> dict[str, str]:
@@ -58,10 +67,31 @@ CONFIGS = {
     "8-defaults-no-remask": ("branch", {**NEW_DEFAULTS, REMASK: "off", POLICY: "union"}, "new defaults + REMASK=off"),
     "9-defaults-verifier": ("branch", {**NEW_DEFAULTS, REMASK: "on", POLICY: "verifier"}, "new defaults + --policy verifier"),
 }
+# The nine, before the ML cells are added: what a run without --configs does.
+DEFAULT_CONFIGS = tuple(CONFIGS)
+
+
+def _ml(mode: str, policy: str) -> dict[str, str]:
+    return {**NEW_DEFAULTS, REMASK: "on", POLICY: policy, "PG_DETECTOR_ENABLE": "ml-span", ML_SHORT: mode}
+
+
+CONFIGS.update({
+    "10-ml-drop": ("branch", _ml("drop", "union"), "new defaults + ml-span, SHORT_VALUES=drop"),
+    "11-ml-strong": ("branch", _ml("strong", "union"), "new defaults + ml-span, SHORT_VALUES=strong"),
+    "12-ml-keep": ("branch", _ml("keep", "union"), "new defaults + ml-span, SHORT_VALUES=keep"),
+    "13-ml-drop-verifier": ("branch", _ml("drop", "verifier"), "new defaults + ml-span, SHORT_VALUES=drop + --policy verifier"),
+    "14-ml-strong-verifier": ("branch", _ml("strong", "verifier"), "new defaults + ml-span, SHORT_VALUES=strong + --policy verifier"),
+    "15-ml-keep-verifier": ("branch", _ml("keep", "verifier"), "new defaults + ml-span, SHORT_VALUES=keep + --policy verifier"),
+})
+ML_CONFIGS = tuple(name for name in CONFIGS if name not in DEFAULT_CONFIGS)
 # Configurations that need the verifier bundle (PG_VERIFIER_BUNDLE).
-NEEDS_VERIFIER = ("9-defaults-verifier",)
+NEEDS_VERIFIER = tuple(name for name, (_, env, _) in CONFIGS.items() if env and env[POLICY] == "verifier")
 # Newly missed gold is counted against this configuration.
 BASELINE = {"2-off": "1-main", "3-filters": "2-off", "4-filters-dummy": "2-off", "5-floor": "2-off", "6-hex": "2-off", "7-all": "2-off",
-            "8-defaults-no-remask": "7-all", "9-defaults-verifier": "7-all"}
+            "8-defaults-no-remask": "7-all", "9-defaults-verifier": "7-all",
+            # ML cells: strong and keep against drop under the same policy; drop + verifier against drop + union (what
+            # the verifier let go); drop + union against 7, as 9 is.
+            "10-ml-drop": "7-all", "11-ml-strong": "10-ml-drop", "12-ml-keep": "10-ml-drop",
+            "13-ml-drop-verifier": "10-ml-drop", "14-ml-strong-verifier": "13-ml-drop-verifier", "15-ml-keep-verifier": "13-ml-drop-verifier"}
 # Configurations run on every set of --nine, not only on CredData-trajectory and real traffic.
 ALL_SETS = ("1-main", "7-all", "8-defaults-no-remask", "9-defaults-verifier")

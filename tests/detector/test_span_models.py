@@ -125,7 +125,10 @@ class SpanModelTests(unittest.TestCase):
             adapter.scan(f"key {SECRET}")
 
     def test_short_and_plain_word_spans_are_dropped(self) -> None:
-        # ml-v9 flagged "of" and "by" in a live demo session.
+        # ml-v9 flagged "of" and "by" in a live demo session. Dropping every span under min_value_length is the "drop"
+        # mode (PG_ML_SHORT_VALUES, tests/detector/test_ml_short_values.py); under the default "strong", "today"
+        # (five characters, a score at strong_threshold) stays.
+        self.options = {**self.options, "short_values": "drop"}
         text = f"the token of the account is set by {SECRET} today"
         rows = self.v9(spans=[("of", 0.9999), ("by", 0.9999), ("today", 0.99), (SECRET, 0.9999)]).scan(text)
         self.assertEqual([text[r.start:r.end] for r in rows], [SECRET])
@@ -341,8 +344,10 @@ class SpanModelTests(unittest.TestCase):
             self.assertTrue(entries[name]["candidate_only"])
         self.assertEqual("models/span-detector-v9", entries["ml-v9"]["options"]["checkpoint"], "a result labelled v9 is v9")
         self.assertEqual("default", entries["ml-span"]["options"]["checkpoint"])
+        # ml-v9 is also pinned to the short-span behaviour from before PG_ML_SHORT_VALUES (test_ml_short_values.py).
+        self.assertEqual("drop", entries["ml-v9"]["options"]["short_values"])
         self.assertEqual(entries["ml-span"]["options"].keys() - {"checkpoint", "fallback_checkpoint"},
-                         entries["ml-v9"]["options"].keys() - {"checkpoint"}, "the two differ only in which bundle")
+                         entries["ml-v9"]["options"].keys() - {"checkpoint", "short_values"}, "the two differ only in which bundle and that pin")
 
     # Which model runs, and saying so
     def bundle(self, name, file="span_bundle.json"):
