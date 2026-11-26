@@ -344,8 +344,10 @@ class SpanModelTests(unittest.TestCase):
             self.assertTrue(entries[name]["candidate_only"])
         self.assertEqual("models/span-detector-v9", entries["ml-v9"]["options"]["checkpoint"], "a result labelled v9 is v9")
         self.assertEqual("default", entries["ml-span"]["options"]["checkpoint"])
+        # ml-v9 is also pinned to the short-span behaviour from before PG_ML_SHORT_VALUES (test_ml_short_values.py).
+        self.assertEqual("drop", entries["ml-v9"]["options"]["short_values"])
         self.assertEqual(entries["ml-span"]["options"].keys() - {"checkpoint", "fallback_checkpoint"},
-                         entries["ml-v9"]["options"].keys() - {"checkpoint"}, "the two differ only in which bundle")
+                         entries["ml-v9"]["options"].keys() - {"checkpoint", "short_values"}, "the two differ only in which bundle and that pin")
 
     # Which model runs, and saying so
     def bundle(self, name, file="span_bundle.json"):

@@ -322,6 +322,114 @@ class ModelsOff(unittest.TestCase):
         self.assertTrue(any(findings for _, findings, _ in seen["drop"]), "the rule detectors did find something to compare")
 
 
+class ShortNonValues(Base):
+    """A short model span that is, whole, a literal, a shell variable, a mask, a format specifier or an angle
+    placeholder is not a value whatever the model's score. Only short spans under strong and keep are judged."""
+
+    HIGH = 0.999
+    # count name: (line, the span the fake model returns)
+    CASES = {
+        "ml_short_literal": [("password: null", "null"), ("password = None", "None"), ("secret: nil", "nil"),
+                             ("use_token: true", "true"), ("use_token = FALSE", "FALSE")],
+        "ml_short_shell_variable": [("mysql -p$PW", "$PW"), ("password=$1", "$1"), ("set PGPASSWORD=%PW%", "%PW%")],
+        "ml_short_mask": [("password: ***", "***"), ("password: xxxx", "xxxx"), ("password: XXX", "XXX"),
+                          ("password: ###", "###"), ("password: -----", "-----")],
+        "ml_short_format": [("password=%s", "%s"), ("pin=%d", "%d")],
+        "ml_short_placeholder": [("password: <pw>", "<pw>"), ("token: <t_1>", "<t_1>"), ("key: <a-b>", "<a-b>")],
+    }
+
+    def found(self, value, line, span, **options):
+        return self.under(value, [(span, self.HIGH)], line + "\n", **options)
+
+    def test_they_are_dropped_under_strong_and_keep(self) -> None:
+        for name, cases in self.CASES.items():
+            for line, span in cases:
+                for value in ("strong", "keep"):
+                    with self.subTest(name=name, line=line, mode=value):
+                        self.assertEqual(self.found(value, line, span), [])
+
+    def test_undefined_when_it_counts_as_short(self) -> None:
+        # Nine characters: short only where min_value_length is set above it.
+        self.assertEqual(self.found("strong", "password: undefined", "undefined", min_value_length=12), [])
+
+    def test_a_literal_inside_quotes_is_a_string_value(self) -> None:
+        for line, span in (('password = "true"', "true"), ('password = "true"', '"true"'), ("password: 'null'", "null"), ("pw=`None`,", "`None`,")):
+            for value in ("strong", "keep"):
+                with self.subTest(line=line, span=span, mode=value):
+                    self.assertEqual(self.found(value, line, span), [(span, "strong")])
+        self.assertEqual(self.found("strong", 'say "true or false', "true"), [], "a quote on one side only is not a string literal")
+        self.assertEqual(self.found("strong", 'pw = "$PW"', "$PW"), [], "a quoted shell variable is still a reference")
+
+    def test_a_value_that_only_looks_like_one_stays(self) -> None:
+        for span in ("p$w", "x9x", "nulls", SHORT, "9", "xXx", "**", "$", "%sd", "<>", "tru", "-x-"):
+            for value in ("strong", "keep"):
+                with self.subTest(span=span, mode=value):
+                    self.assertEqual(self.found(value, f"password: {span}", span), [(span, "strong")])
+
+    def test_six_characters_and_more_are_not_judged(self) -> None:
+        # What main (73282b9) returns: a long span is kept whatever it holds; the ensemble's structure filters and the
+        # other detectors' own checks are a separate matter.
+        for span in ("undefined", "********", "$PASSWORD", "<password>", "xxxxxx", "%(pw)s"):
+            for value in MODES:
+                with self.subTest(span=span, mode=value):
+                    self.assertEqual(self.found(value, f"password: {span}", span), [(span, "strong")])
+
+    def test_drop_is_as_before_and_counts_nothing(self) -> None:
+        with mode("drop"):
+            adapter = self.adapter([("null", self.HIGH), ("$PW", self.HIGH), ("***", self.HIGH)])
+            self.assertEqual(adapter.scan_many(["password: null\n", "mysql -p$PW\n", "password: ***\n"]), [[], [], []])
+            self.assertFalse(any(adapter.declined() or []), "dropped for its length, as before: not a filter count")
+
+    def test_the_count_is_kept_by_name_and_no_value(self) -> None:
+        lines = [line for cases in self.CASES.values() for line, _ in cases]
+        spans = [(span, self.HIGH) for cases in self.CASES.values() for _, span in cases]
+        text = "\n".join(lines) + f'\npassword = "{SHORT}"\n'
+        adapter = self.adapter(spans + [(SHORT, self.HIGH)])
+        result = self.detector(adapter).scan(text, "tool_output")
+        self.assertEqual(result["filtered"], {name: len(cases) for name, cases in self.CASES.items()})
+        start = text.index(SHORT)
+        self.assertEqual([(row["start"], row["end"]) for row in result["findings"]], [(start, start + len(SHORT))])
+        self.assertEqual(set(result["filtered"]), {"ml_short_literal", "ml_short_shell_variable", "ml_short_mask", "ml_short_format", "ml_short_placeholder"})
+
+    def test_an_unsure_one_under_strong_is_dropped_for_its_score_not_counted(self) -> None:
+        adapter = self.adapter([("null", UNSURE)])
+        self.assertEqual(adapter.scan_many(["password: null\n"]), [[]])
+        self.assertFalse(any(adapter.declined() or []))
+        with mode("keep"):
+            adapter = self.adapter([("null", UNSURE)])
+            self.assertEqual(adapter.scan_many(["password: null\n"]), [[]])
+            self.assertEqual(adapter.declined(), [{"ml_short_literal": 1}])
+
+    def test_every_model_adapter(self) -> None:
+        with mode("strong"):
+            adapters = [self.adapter([("null", 0.99)]), self.adapter([("null", 0.99)], MLV9Adapter, "ml-v9"),
+                        QwenAdapter("ml-qwen", {"repository": str(self.repo)}, ROOT, factory=lambda bundle, **kw: existing.FakeQwen(bundle, values=["null"], **kw))]
+        for adapter in adapters:
+            self.assertEqual(adapter.scan_many(["password: null\n"]), [[]], adapter.name)
+            self.assertEqual(adapter.declined(), [{"ml_short_literal": 1}], adapter.name)
+
+
+class ShippedConfig(Base):
+    """detector.json as shipped: ml-v9 is pinned to drop (it scored "of" and "by" 0.9999 in a live demo, so its score
+    for a short span is not evidence); ml-span and ml-qwen take the default. The environment still wins."""
+
+    def modes(self):
+        config = json.loads((ROOT / "src" / "detector" / "detector.json").read_text(encoding="utf-8"))
+        options = {entry["name"]: {**entry["options"], "repository": str(self.repo)} for entry in config["adapters"] if entry["name"].startswith("ml-")}
+        span = MLSpanAdapter("ml-span", options["ml-span"], ROOT, factory=lambda c, device: existing.FakeV9(c, device))
+        v9 = MLV9Adapter("ml-v9", options["ml-v9"], ROOT, factory=lambda c, device: existing.FakeV9(c, device))
+        qwen = QwenAdapter("ml-qwen", options["ml-qwen"], ROOT, factory=lambda bundle, **kw: existing.FakeQwen(bundle, **kw))
+        return {adapter.name: adapter.short_values for adapter in (span, v9, qwen)}
+
+    def test_ml_v9_is_drop_and_the_others_strong(self) -> None:
+        self.assertEqual(self.modes(), {"ml-span": "strong", "ml-v9": "drop", "ml-qwen": "strong"})
+
+    def test_the_environment_wins(self) -> None:
+        for value in MODES:
+            with mode(value):
+                self.assertEqual(self.modes(), {"ml-span": value, "ml-v9": value, "ml-qwen": value})
+
+
 class DropRunsTheExistingTests(existing.SpanModelTests):
     """PG_ML_SHORT_VALUES=drop: every test of test_span_models.py, as it was written before this setting."""
 

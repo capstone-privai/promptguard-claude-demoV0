@@ -32,18 +32,35 @@ import os
 import re
 import sys
 import threading
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from .. import settings
 from ..adapter import AdapterUnavailable, DetectorAdapter, RawFinding
+from ..filters import _NO_VALUE  # none, null, undefined: what a lookup default already counts as "no value"
 from .shell_aware import PROSE_WORDS
 
 DEFAULT_REPOSITORY = "../../../promptguard-model"
 DEFAULT_SPAN_BUNDLE = "models/span-detector-v10"
 DEFAULT_QWEN_BUNDLE = "models/qwen-span-v3"
 SHORT_VALUE_MODES = ("strong", "keep", "drop")
+# Counted around a model span for its length, and what makes a literal a string value when it stands on both sides.
+STRIP = "\"'`.,;:()[]{}"
+QUOTES = "\"'`"
+# A short model span that is one of these, whole, is not a value by its structure, whatever the model's score: without
+# the length floor a model that is sure of "null" or "$PW" would mask it. The ensemble's structure filters
+# (filters.py STRUCTURE) do not look at these shapes and are not changed, since every adapter's findings pass through
+# them. The first name of each row is the count reported (declined), never the value. A value that only resembles one
+# (p$w, x9x, nulls) passes.
+SHORT_LITERALS = frozenset(_NO_VALUE | {"nil", "true", "false"})
+SHORT_NON_VALUES = (
+    ("ml_short_shell_variable", re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9]+|%[A-Za-z_][A-Za-z0-9_]*%")),
+    ("ml_short_mask", re.compile(r"([*xX#-])\1{2,}")),
+    ("ml_short_format", re.compile(r"%[sd]")),
+    ("ml_short_placeholder", re.compile(r"<[A-Za-z0-9_-]+>")),
+)
 # Words that suggest a credential is nearby. Used only when an adapter sets
 # "gate": "cue" to skip slow models on text with no such word.
 # Whole words only (snake_case and camelCase parts count): "passed" or "bypass"
@@ -63,6 +80,17 @@ def _setting(name: str, options: Mapping[str, Any], key: str) -> str:
         return raw.strip()
     value = options.get(key)
     return settings.DEFAULTS[name] if value is None else str(value).strip()
+
+
+def _short_non_value(word: str, before: str, after: str) -> str | None:
+    """The count name when a short span's value is, whole, something that is not a value by its structure, else None.
+
+    ``before`` and ``after`` are the characters on either side of it ("" at the ends of the text). A literal with a
+    quote on both sides is a string ("true", 'null') and may be the value itself, so it passes.
+    """
+    if word.lower() in SHORT_LITERALS:
+        return None if before and after and before in QUOTES and after in QUOTES else "ml_short_literal"
+    return next((name for name, pattern in SHORT_NON_VALUES if pattern.fullmatch(word)), None)
 
 
 def _resolve(base: Path, value: str | None, default: str) -> Path:
@@ -150,10 +178,13 @@ class _ModelRepoAdapter(DetectorAdapter):
         # one-character password the model is sure of is masked and a short guess is not. "keep": never dropped for
         # its length; the score decides strong or ambiguous (the filter switched off, for measurement). "drop": every
         # short span is dropped, the behaviour before this setting, for going back and for comparison. A span of
-        # min_value_length or more is the same in all three.
+        # min_value_length or more is the same in all three. Under "strong" and "keep" a short span that is a literal,
+        # a shell variable, a mask, a format specifier or an angle placeholder (SHORT_NON_VALUES) is dropped and
+        # counted by name for the ensemble (declined), per text of this thread's batch.
         self.short_values = _setting("PG_ML_SHORT_VALUES", options, "short_values")
         if self.short_values not in SHORT_VALUE_MODES:
             raise ValueError("short_values must be 'strong', 'keep' or 'drop'")
+        self._batch = threading.local()
         # One model instance is not safe to share across the worker's request
         # threads; a single executor thread serializes calls and lets a timeout
         # return control while the model call finishes in the background.
@@ -191,6 +222,17 @@ class _ModelRepoAdapter(DetectorAdapter):
         except FutureTimeout:
             raise RuntimeError(f"{self.name} timed out") from None
 
+    def scan_many(self, texts: Sequence[str]) -> list[list[RawFinding]]:
+        self._batch.declined = []
+        out = []
+        for text in texts:
+            self._batch.declined.append(Counter())
+            out.append(self.scan(text))
+        return out
+
+    def declined(self) -> list[Mapping[str, int]] | None:
+        return [dict(counts) for counts in getattr(self._batch, "declined", [])] or None
+
     def scan(self, text: str) -> list[RawFinding]:
         if not text.strip():
             return []
@@ -210,7 +252,11 @@ class _ModelRepoAdapter(DetectorAdapter):
             if not (0 <= start < end <= len(text)):
                 raise RuntimeError(f"{self.name} returned an invalid span")
             strong = score >= self.strong_threshold
-            if not self._plausible(text[start:end], strong):
+            kept, reason = self._judge(text, start, end, strong)
+            if not kept:
+                declined = getattr(self._batch, "declined", None)
+                if reason and declined:
+                    declined[-1][reason] += 1
                 continue
             findings.append(RawFinding(
                 start, end, "SECRET", f"{self.family}-span",
@@ -248,14 +294,23 @@ class _ModelRepoAdapter(DetectorAdapter):
             out.extend((base + start, base + end, score) for start, end, score in self._spans(piece))
         return out
 
-    def _plausible(self, value: str, strong: bool) -> bool:
-        """Whether a model span may be a credential value; ``strong`` is whether its score reached strong_threshold."""
-        word = value.strip().strip("\"'`.,;:()[]{}")
+    def _judge(self, text: str, start: int, end: int, strong: bool) -> tuple[bool, str | None]:
+        """(whether the model span text[start:end] is reported, the count name when a short span is dropped for its
+        structure). ``strong`` is whether its score reached strong_threshold."""
+        raw = text[start:end]
+        inner = raw.strip()
+        word = inner.strip(STRIP)
         if not word or word.lower() in PROSE_WORDS:
-            return False
-        if len(word) >= self.min_value_length or self.short_values == "keep":
-            return True
-        return strong and self.short_values == "strong"
+            return False, None
+        if len(word) >= self.min_value_length:
+            return True, None
+        if self.short_values == "drop" or (self.short_values == "strong" and not strong):
+            return False, None
+        # Where the word stands in the text, to see what is on either side of it.
+        first = start + (len(raw) - len(raw.lstrip())) + (len(inner) - len(inner.lstrip(STRIP)))
+        last = first + len(word)
+        reason = _short_non_value(word, text[max(0, first - 1):first], text[last:last + 1])
+        return reason is None, reason
 
     def _model_length_guard(self, factory: Callable[..., Any]) -> dict[str, int]:
         """What to build the model with so that its own length guard does not drop a short span first.

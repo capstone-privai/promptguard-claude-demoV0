@@ -79,6 +79,7 @@
       "options": {
         "repository": "../../../promptguard-model",
         "checkpoint": "models/span-detector-v9",
+        "short_values": "drop",
         "device": "cpu",
         "gate": "always",
         "timeout_seconds": 4,
